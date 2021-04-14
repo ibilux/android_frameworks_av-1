@@ -44,6 +44,14 @@
 #include "FastMixer.h"
 #include "TypedLogger.h"
 
+#if defined(MTK_LATENCY_DETECT_PULSE)
+#include "AudioDetectPulse.h"
+#endif // MTK_LATENCY_DETECT_PULSE
+
+// <MTK_AUDIOMIXER_ENABLE_DRC
+#include <media/AudioUtilmtk.h>
+// MTK_AUDIOMIXER_ENABLE_DRC>
+
 namespace android {
 
 /*static*/ const FastMixerState FastMixer::sInitial;
@@ -68,7 +76,12 @@ FastMixer::FastMixer(audio_io_handle_t parentIoHandle)
     // timestamp
     mNativeFramesWrittenButNotPresented(0),   // the = 0 is to silence the compiler
     mMasterMono(false),
-    mThreadIoHandle(parentIoHandle)
+    mThreadIoHandle(parentIoHandle),
+// <MTK_AUDIOMIXER_ENABLE_DRC // ALPS04408933 low latency support drc
+    mDRCEnableGen(0),
+    mUpdateACFHCFParamGen(0),
+    mUpdateCustomSceneParamGen(0)
+// MTK_AUDIOMIXER_ENABLE_DRC>
 {
     (void)mThreadIoHandle; // prevent unused warning, see C++17 [[maybe_unused]]
 
@@ -340,6 +353,36 @@ void FastMixer::onStateChange()
 
         mFastTracksGen = current->mFastTracksGen;
     }
+
+    if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        // ALPS04408933 low latency support drc
+        if (current->mDRCEnableGen != mDRCEnableGen) {
+            ALOGD("%s, mDRCEnable %d", __func__, current->mDRCEnable);
+
+            mMixer->setDRCEnable(current->mDRCEnable);
+            mDRCEnableGen = current->mDRCEnableGen;
+        }
+
+        if (current->mUpdateACFHCFParamGen != mUpdateACFHCFParamGen) {
+            ALOGD("%s, UpdateACFHCFParam", __func__);
+
+            mMixer->setParameter(
+                0,
+                AudioMixer::DRC,
+                AudioMixer::UPDATE_ACFHCF, (void *)NULL);
+            mUpdateACFHCFParamGen = current->mUpdateACFHCFParamGen;
+        }
+
+        if (current->mUpdateCustomSceneParamGen != mUpdateCustomSceneParamGen) {
+            ALOGD("%s, UpdateCustomSceneParam, %s", __func__, current->mCustomScene.string());
+
+            mMixer->setParameter(
+                0,
+                AudioMixer::DRC,
+                AudioMixer::UPDATE_SCENE, (void *)current->mCustomScene.string());
+            mUpdateCustomSceneParamGen = current->mUpdateCustomSceneParamGen;
+        }
+    } // MTK_AUDIOMIXER_ENABLE_DRC
 }
 
 void FastMixer::onWork()
@@ -408,6 +451,29 @@ void FastMixer::onWork()
                 mMixer->setParameter(name, AudioMixer::RAMP_VOLUME, AudioMixer::VOLUME0, &vlf);
                 mMixer->setParameter(name, AudioMixer::RAMP_VOLUME, AudioMixer::VOLUME1, &vrf);
             }
+
+            if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+                // ALPS04408933 low latency support drc
+                //ALOGD("%s, drc set, track name %d, mStreamType %d, mOutputDevice %d",
+                //        __func__, name, fastTrack->mStreamType, fastTrack->mOutputDevice);
+                if (name != 0) {
+                    mMixer->setParameter(
+                        name,
+                        AudioMixer::TRACK,
+                        AudioMixer::STREAM_TYPE, (void *)fastTrack->mStreamType);
+
+                    mMixer->setParameter(
+                        name,
+                        AudioMixer::TRACK,
+                        AudioMixer::FLAGS, (void *)AUDIO_OUTPUT_FLAG_FAST);
+
+                    mMixer->setParameter(
+                        name,
+                        AudioMixer::DRC,
+                        AudioMixer::DEVICE, (void *)(uintptr_t)fastTrack->mOutputDevice);
+                }
+            } // MTK_AUDIOMIXER_ENABLE_DRC
+
             // FIXME The current implementation of framesReady() for fast tracks
             // takes a tryLock, which can block
             // up to 1 ms.  If enough active tracks all blocked in sequence, this would result
@@ -487,6 +553,14 @@ void FastMixer::onWork()
                     audio_bytes_per_sample(mFormat.mFormat),
                     frameCount * audio_bytes_per_frame(mAudioChannelCount, mFormat.mFormat));
         }
+
+#if defined(MTK_LATENCY_DETECT_PULSE)
+        if (AudioDetectPulse::getDetectPulse()) {
+            AudioDetectPulse::doDetectPulse(TAG_FAST_MIXER, 800, 0, (void *)buffer, mMixerBufferSize,
+                                            mFormat.mFormat, mSinkChannelCount, mSampleRate);
+        }
+#endif // MTK_LATENCY_DETECT_PULSE
+
         // if non-NULL, then duplicate write() to this non-blocking sink
 #ifdef TEE_SINK
         mTee.write(buffer, frameCount);

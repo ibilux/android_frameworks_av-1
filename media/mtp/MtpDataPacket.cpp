@@ -631,6 +631,19 @@ int64_t MtpDataPacket::write(struct usb_request *request,
         processedBytes += bulkTransferSize;
     }
 
+    // if data lenght is max_pack_size, send zlp to end
+    if (processedBytes == containerLength &&
+        containerLength % request->max_packet_size == 0) {
+        // Bulk transfer.
+        mPacketSize = 0;
+        request->buffer_length = mPacketSize;
+        const int result = transfer(request);
+        if (result < 0) {
+            // Cannot recover writing error.
+            ALOGE("Found an error while write zlp data to MtpDevice.");
+            return -1;
+        }
+    }
     return readError ? -1 : processedBytes;
 }
 

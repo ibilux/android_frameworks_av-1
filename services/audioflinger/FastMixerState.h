@@ -51,6 +51,10 @@ struct FastTrack {
     bool                    mHapticPlaybackEnabled = false; // haptic playback is enabled or not
     AudioMixer::haptic_intensity_t mHapticIntensity = AudioMixer::HAPTIC_SCALE_MUTE; // intensity of
                                                                                      // haptic data
+// <MTK_AUDIOMIXER_ENABLE_DRC // ALPS04408933 low latency support drc
+    audio_stream_type_t     mStreamType;
+    audio_devices_t         mOutputDevice;
+// MTK_AUDIOMIXER_ENABLE_DRC>
 };
 
 // Represents a single state of the fast mixer
@@ -89,7 +93,15 @@ struct FastMixerState : FastThreadState {
 
     // initialize sMaxFastTracks
     static void sMaxFastTracksInit();
+// <MTK_AUDIOMIXER_ENABLE_DRC // ALPS04408933 low latency support drc
+    bool        mDRCEnable;
+    int         mDRCEnableGen;
 
+    int         mUpdateACFHCFParamGen;
+
+    String8     mCustomScene;
+    int         mUpdateCustomSceneParamGen;
+// MTK_AUDIOMIXER_ENABLE_DRC>
 };  // struct FastMixerState
 
 }   // namespace android

@@ -29,6 +29,10 @@
 #include <media/TimeCheck.h>
 #include <mediautils/ServiceUtilities.h>
 #include <system/audio.h>
+#include <media/AudioUtilmtk.h>
+#if defined(MTK_AUDIO)
+#include <AudioPolicyParameters.h>
+#endif
 
 namespace android {
 
@@ -104,7 +108,12 @@ enum {
     GET_VOLUME_GROUP_FOR_ATTRIBUTES,
     SET_ALLOWED_CAPTURE_POLICY,
     MOVE_EFFECTS_TO_IO,
-    SET_RTT_ENABLED
+    SET_RTT_ENABLED,
+#if defined(MTK_AUDIO)
+    SET_POLICYMANAGER_PARAMETERS,
+    START_OUTPUT_SAMPLERATE,
+    STOP_OUTPUT_SAMPLERATE,
+#endif
 };
 
 #define MAX_ITEMS_PER_LIST 1024
@@ -626,6 +635,52 @@ public:
         return reply.readInt32();
     }
 
+//<MTK_AUDIO_ADD
+#if defined(MTK_AUDIO)
+    virtual status_t setPolicyManagerParameters(int par1, int par2, int par3, int par4)
+    {
+        Parcel data, reply;
+        data.writeInterfaceToken(IAudioPolicyService::getInterfaceDescriptor());
+        data.writeInt32(par1);
+        data.writeInt32(par2);
+        data.writeInt32(par3);
+        data.writeInt32(par4);
+        remote()->transact(SET_POLICYMANAGER_PARAMETERS, data, &reply);
+        return static_cast <status_t> (reply.readInt32());
+    }
+#else
+    virtual status_t setPolicyManagerParameters(int par1 __unused, int par2 __unused, int par3 __unused, int par4 __unused)
+    {
+        return 0;
+    }
+#endif
+    virtual status_t startOutputSamplerate(audio_port_handle_t portId, int samplerate)
+    {
+        if (FeatureOption::MTK_HIFIAUDIO_SUPPORT) {
+            Parcel data, reply;
+            data.writeInterfaceToken(IAudioPolicyService::getInterfaceDescriptor());
+            data.writeInt32((int32_t)portId);
+            data.writeInt32(samplerate);
+            remote()->transact(START_OUTPUT, data, &reply);
+            return static_cast <status_t> (reply.readInt32());
+        } else {
+            return 0;
+        }
+    }
+    virtual status_t stopOutputSamplerate(audio_port_handle_t portId, int samplerate)
+    {
+        if (FeatureOption::MTK_HIFIAUDIO_SUPPORT) {
+        Parcel data, reply;
+        data.writeInterfaceToken(IAudioPolicyService::getInterfaceDescriptor());
+        data.writeInt32((int32_t)portId);
+        data.writeInt32(samplerate);
+        remote()->transact(STOP_OUTPUT, data, &reply);
+        return static_cast <status_t> (reply.readInt32());
+        } else {
+            return 0;
+        }
+    }
+//MTK_AUDIO_ADD>
     virtual bool isOffloadSupported(const audio_offload_info_t& info)
     {
         Parcel data, reply;
@@ -1310,6 +1365,16 @@ status_t BnAudioPolicyService::onTransact(
         case ACQUIRE_SOUNDTRIGGER_SESSION:
         case RELEASE_SOUNDTRIGGER_SESSION:
         case MOVE_EFFECTS_TO_IO:
+#if defined(MTK_AUDIO)
+            if ((code == ACQUIRE_SOUNDTRIGGER_SESSION) ||
+                (code == RELEASE_SOUNDTRIGGER_SESSION)) {
+                if (bypass_transact_check == 1) {
+                    ALOGW("%s: code %d bypass transact check",
+                          __func__, code);
+                    break;
+                }
+            }
+#endif
             ALOGW("%s: transaction %d received from PID %d",
                   __func__, code, IPCThreadState::self()->getCallingPid());
             // return status only for non void methods
@@ -1359,8 +1424,10 @@ status_t BnAudioPolicyService::onTransact(
             break;
     }
 
+#if !defined(CONFIG_MT_ENG_BUILD) && !defined(CONFIG_MT_USERDEBUG_BUILD)
     std::string tag("IAudioPolicyService command " + std::to_string(code));
     TimeCheck check(tag.c_str());
+#endif
 
     switch (code) {
         case SET_DEVICE_CONNECTION_STATE: {
@@ -1805,6 +1872,40 @@ status_t BnAudioPolicyService::onTransact(
             return status;
         }
 
+#if defined(MTK_AUDIO)
+        case SET_POLICYMANAGER_PARAMETERS: {
+            CHECK_INTERFACE(IAudioPolicyService, data, reply);
+            int par1 = data.readInt32();
+            int par2 = data.readInt32();
+            int par3 = data.readInt32();
+            int par4 = data.readInt32();
+            reply->writeInt32(setPolicyManagerParameters(par1, par2, par3, par4));
+            if (par1 == POLICY_SET_VOW_WITH_HOTWORD) {
+                bypass_transact_check = (bool)par2;
+                ALOGV("%s: transaction %d bypass transact check: %d",
+                      __func__, par1, bypass_transact_check);
+            }
+            return NO_ERROR;
+        } break;
+        case START_OUTPUT_SAMPLERATE: {
+            if (FeatureOption::MTK_HIFIAUDIO_SUPPORT) {
+                CHECK_INTERFACE(IAudioPolicyService, data, reply);
+                const audio_port_handle_t portId = static_cast <audio_port_handle_t>(data.readInt32());
+                int samplerate = data.readInt32();
+                reply->writeInt32(static_cast <uint32_t>(startOutputSamplerate(portId, samplerate)));
+            }
+            return NO_ERROR;
+        }
+        case STOP_OUTPUT_SAMPLERATE: {
+            if (FeatureOption::MTK_HIFIAUDIO_SUPPORT) {
+                CHECK_INTERFACE(IAudioPolicyService, data, reply);
+                const audio_port_handle_t portId = static_cast <audio_port_handle_t>(data.readInt32());
+                int samplerate = data.readInt32();
+                reply->writeInt32(static_cast <uint32_t>(stopOutputSamplerate(portId, samplerate)));
+            }
+            return NO_ERROR;
+        }
+#endif
         case IS_OFFLOAD_SUPPORTED: {
             CHECK_INTERFACE(IAudioPolicyService, data, reply);
             audio_offload_info_t info = {};

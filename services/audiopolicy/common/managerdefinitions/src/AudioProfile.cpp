@@ -364,6 +364,31 @@ status_t AudioProfileVector::checkCompatibleProfile(uint32_t &samplingRate,
             portType == AUDIO_PORT_TYPE_MIX && portRole == AUDIO_PORT_ROLE_SINK
             && audio_is_linear_pcm(format);
 
+#if defined(MTK_AUDIO)  // ALPS04706726, search for exact match format
+    if (checkInexact) {
+        for (ssize_t i = size() - 1; i >= 0 ; --i) {
+            const sp<AudioProfile> profile = itemAt(i);
+            audio_format_t formatToCompare = profile->getFormat();
+            if (formatToCompare == format && formatToCompare != AUDIO_FORMAT_DEFAULT
+                    && audio_is_linear_pcm(formatToCompare)) {
+                // Compatible profile has been found, checks if this profile has compatible
+                // rate and channels as well
+                audio_channel_mask_t updatedChannels;
+                uint32_t updatedRate;
+                if (profile->checkCompatibleChannelMask(channelMask, updatedChannels,
+                                                        portType, portRole) == NO_ERROR &&
+                        profile->checkCompatibleSamplingRate(samplingRate, updatedRate) == NO_ERROR) {
+                    // for inexact checks we take the first linear pcm format due to sorting.
+                    format = formatToCompare;
+                    channelMask = updatedChannels;
+                    samplingRate = updatedRate;
+                    return NO_ERROR;
+                }
+            }
+        }
+    }
+#endif
+
     // iterate from best format to worst format (reverse order)
     for (ssize_t i = size() - 1; i >= 0 ; --i) {
         const sp<AudioProfile> profile = itemAt(i);
@@ -616,6 +641,21 @@ int AudioProfileVector::compareFormats(const sp<AudioProfile> *profile1,
                                        const sp<AudioProfile> *profile2)
 {
     return AudioPort::compareFormats((*profile1)->getFormat(), (*profile2)->getFormat());
+}
+
+status_t AudioProfile::addChannelMask(audio_channel_mask_t mask)
+{
+#if defined(MTK_AUDIO)
+    if (mChannelMasks.indexOf(mask) < 0) {
+        mChannelMasks.add(mask);
+        return NO_ERROR;
+    } else {
+        return BAD_VALUE;
+    }
+#else
+    ALOGW("%s unsupport, mask 0x%x", __FUNCTION__, mask);
+    return INVALID_OPERATION;
+#endif
 }
 
 } // namespace android

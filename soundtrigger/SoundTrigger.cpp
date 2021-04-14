@@ -96,7 +96,7 @@ sp<SoundTrigger> SoundTrigger::attach(const String16& opPackageName,
                                       const sound_trigger_module_handle_t module,
                                       const sp<SoundTriggerCallback>& callback)
 {
-    ALOGV("attach()");
+    ALOGI("attach()");
     sp<SoundTrigger> soundTrigger;
     const sp<ISoundTriggerHwService> service = getSoundTriggerHwService();
     if (service == 0) {
@@ -118,7 +118,7 @@ sp<SoundTrigger> SoundTrigger::attach(const String16& opPackageName,
 
 status_t SoundTrigger::setCaptureState(bool active)
 {
-    ALOGV("setCaptureState(%d)", active);
+    ALOGI("setCaptureState(%d)", active);
     const sp<ISoundTriggerHwService> service = getSoundTriggerHwService();
     if (service == 0) {
         return NO_INIT;
@@ -142,7 +142,7 @@ SoundTrigger::~SoundTrigger()
 
 
 void SoundTrigger::detach() {
-    ALOGV("detach()");
+    ALOGI("detach(): %p", this);
     Mutex::Autolock _l(mLock);
     mCallback.clear();
     if (mISoundTrigger != 0) {
@@ -155,6 +155,8 @@ void SoundTrigger::detach() {
 status_t SoundTrigger::loadSoundModel(const sp<IMemory>& modelMemory,
                                 sound_model_handle_t *handle)
 {
+    ALOGI("loadSoundModel(): %p", this);
+
     Mutex::Autolock _l(mLock);
     if (mISoundTrigger == 0) {
         return NO_INIT;
@@ -165,6 +167,8 @@ status_t SoundTrigger::loadSoundModel(const sp<IMemory>& modelMemory,
 
 status_t SoundTrigger::unloadSoundModel(sound_model_handle_t handle)
 {
+    ALOGI("unloadSoundModel(): %p, handle = %d", this, handle);
+
     Mutex::Autolock _l(mLock);
     if (mISoundTrigger == 0) {
         return NO_INIT;
@@ -175,6 +179,8 @@ status_t SoundTrigger::unloadSoundModel(sound_model_handle_t handle)
 status_t SoundTrigger::startRecognition(sound_model_handle_t handle,
                                         const sp<IMemory>& dataMemory)
 {
+    ALOGI("startRecognition(): %p, handle = %d", this, handle);
+
     Mutex::Autolock _l(mLock);
     if (mISoundTrigger == 0) {
         return NO_INIT;
@@ -184,6 +190,8 @@ status_t SoundTrigger::startRecognition(sound_model_handle_t handle,
 
 status_t SoundTrigger::stopRecognition(sound_model_handle_t handle)
 {
+    ALOGI("stopRecognition(): %p, handle = %d", this, handle);
+
     Mutex::Autolock _l(mLock);
     if (mISoundTrigger == 0) {
         return NO_INIT;
@@ -203,12 +211,15 @@ status_t SoundTrigger::getModelState(sound_model_handle_t handle)
 // BpSoundTriggerClient
 void SoundTrigger::onRecognitionEvent(const sp<IMemory>& eventMemory)
 {
+    ALOGI("onRecognitionEvent(): %p", this);
+
     Mutex::Autolock _l(mLock);
     if (eventMemory == 0 || eventMemory->pointer() == NULL) {
         return;
     }
 
     if (mCallback != 0) {
+        ALOGI("onRecognitionEvent(): %p, callback onRecognitionEvent", this);
         mCallback->onRecognitionEvent(
                 (struct sound_trigger_recognition_event *)eventMemory->pointer());
     }
@@ -216,6 +227,8 @@ void SoundTrigger::onRecognitionEvent(const sp<IMemory>& eventMemory)
 
 void SoundTrigger::onSoundModelEvent(const sp<IMemory>& eventMemory)
 {
+    ALOGI("onSoundModelEvent(): %p", this);
+
     Mutex::Autolock _l(mLock);
     if (eventMemory == 0 || eventMemory->pointer() == NULL) {
         return;
@@ -229,6 +242,8 @@ void SoundTrigger::onSoundModelEvent(const sp<IMemory>& eventMemory)
 
 void SoundTrigger::onServiceStateChange(const sp<IMemory>& eventMemory)
 {
+    ALOGI("onServiceStateChange(): %p", this);
+
     Mutex::Autolock _l(mLock);
     if (eventMemory == 0 || eventMemory->pointer() == NULL) {
         return;

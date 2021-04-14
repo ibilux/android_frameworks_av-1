@@ -29,6 +29,11 @@
 #define ATRACE_TAG ATRACE_TAG_AUDIO
 #include <utils/Trace.h>
 
+#if defined(MTK_AUDIO_DEBUG)
+#include <string.h>
+#include <media/AudioUtilmtk.h>
+#endif
+
 using android::WrappingBuffer;
 
 using namespace aaudio;
@@ -198,6 +203,21 @@ aaudio_result_t AudioStreamInternalCapture::readNowWithConversion(void *buffer,
                 __func__, sourceFormat, destinationFormat);
             return AAUDIO_ERROR_INVALID_FORMAT;
         }
+
+#if defined(MTK_AUDIO_DEBUG)
+        {
+            using namespace android;
+            if (AudioDump::getProperty(AudioDump::PROP_AUDIO_DUMP_AAUDIO)) {
+                String8 fileName = String8::format("%s_pid%d_tid%d.pcm",
+                                                   AudioDump::aaudio_exclusive_ul,
+                                                   getpid(), gettid());
+                AudioDump::threadDump(fileName, destination, numBytes,
+                           AAudioConvert_aaudioToAndroidDataFormat(getFormat()),
+                           getSampleRate(), getSamplesPerFrame());
+            }
+        }
+#endif
+
         destination += numBytes;
         framesLeft -= framesToProcess;
     }

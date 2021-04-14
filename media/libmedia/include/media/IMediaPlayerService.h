@@ -60,6 +60,11 @@ public:
     virtual sp<IRemoteDisplay> listenForRemoteDisplay(const String16 &opPackageName,
             const sp<IRemoteDisplayClient>& client, const String8& iface) = 0;
 
+/// M: MTK WFD feature {@
+    virtual status_t enableRemoteDisplay(const char *iface) = 0;
+    virtual status_t enableRemoteDisplay(const char *iface, const uint32_t wfdFlags) = 0;
+/// @}
+
     // codecs and audio devices usage tracking for the battery app
     enum BatteryDataBits {
         // tracking audio codec

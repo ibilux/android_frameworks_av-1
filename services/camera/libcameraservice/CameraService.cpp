@@ -95,7 +95,13 @@ using hardware::camera::common::V1_0::TorchModeStatus;
 // ----------------------------------------------------------------------------
 // Logging support -- this is for debugging only
 // Use "adb shell dumpsys media.camera -v 1" to change it.
+//!++ For MTK debug use
+#if (MTKCAM_TARGET_BUILD_USER)
 volatile int32_t gLogLevel = 0;
+#else
+volatile int32_t gLogLevel = 2;
+#endif
+//!--
 
 #define LOG1(...) ALOGD_IF(gLogLevel >= 1, __VA_ARGS__);
 #define LOG2(...) ALOGD_IF(gLogLevel >= 2, __VA_ARGS__);
@@ -253,6 +259,15 @@ void CameraService::onNewProviderRegistered() {
     enumerateProviders();
 }
 
+bool CameraService::isPublicallyHiddenSecureCamera(const String8& cameraId) {
+    auto state = getCameraState(cameraId);
+    if (state != nullptr) {
+        return state->isPublicallyHiddenSecureCamera();
+    }
+    // Hidden physical camera ids won't have CameraState
+    return mCameraProviderManager->isPublicallyHiddenSecureCamera(cameraId.c_str());
+}
+
 void CameraService::updateCameraNumAndIds() {
     Mutex::Autolock l(mServiceLock);
     mNumberOfCameras = mCameraProviderManager->getCameraCount();
@@ -268,6 +283,8 @@ void CameraService::addStates(const String8 id) {
         ALOGE("Failed to query device resource cost: %s (%d)", strerror(-res), res);
         return;
     }
+    bool isPublicallyHiddenSecureCamera =
+            mCameraProviderManager->isPublicallyHiddenSecureCamera(id.string());
     std::set<String8> conflicting;
     for (size_t i = 0; i < cost.conflictingDevices.size(); i++) {
         conflicting.emplace(String8(cost.conflictingDevices[i].c_str()));
@@ -276,7 +293,8 @@ void CameraService::addStates(const String8 id) {
     {
         Mutex::Autolock lock(mCameraStatesLock);
         mCameraStates.emplace(id, std::make_shared<CameraState>(id, cost.resourceCost,
-                                                                conflicting));
+                                                                conflicting,
+                                                                isPublicallyHiddenSecureCamera));
     }
 
     if (mFlashlight->hasFlashUnit(id)) {
@@ -514,8 +532,16 @@ Status CameraService::getCameraCharacteristics(const String16& cameraId,
                 "Camera subsystem is not available");;
     }
 
-    Status ret{};
+    if (shouldRejectHiddenCameraConnection(String8(cameraId))) {
+        ALOGW("Attempting to retrieve characteristics for system-only camera id %s, rejected",
+              String8(cameraId).string());
+        return STATUS_ERROR_FMT(ERROR_DISCONNECTED,
+                                "No camera device with ID \"%s\" currently available",
+                                String8(cameraId).string());
 
+    }
+
+    Status ret{};
     status_t res = mCameraProviderManager->getCameraCharacteristics(
             String8(cameraId).string(), cameraInfo);
     if (res != OK) {
@@ -1330,7 +1356,7 @@ bool CameraService::shouldRejectHiddenCameraConnection(const String8 & cameraId)
     // publically hidden, we should reject the connection.
     if (!hardware::IPCThreadState::self()->isServingCall() &&
             CameraThreadState::getCallingPid() != getpid() &&
-            mCameraProviderManager->isPublicallyHiddenSecureCamera(cameraId.c_str())) {
+            isPublicallyHiddenSecureCamera(cameraId)) {
         return true;
     }
     return false;
@@ -1799,15 +1825,24 @@ Status CameraService::addListenerHelper(const sp<ICameraServiceListener>& listen
     {
         Mutex::Autolock lock(mCameraStatesLock);
         for (auto& i : mCameraStates) {
-            if (!isVendorListener &&
-                mCameraProviderManager->isPublicallyHiddenSecureCamera(i.first.c_str())) {
-                ALOGV("Cannot add public listener for hidden system-only %s for pid %d",
-                      i.first.c_str(), CameraThreadState::getCallingPid());
-                continue;
-            }
             cameraStatuses->emplace_back(i.first, mapToInterface(i.second->getStatus()));
         }
     }
+
+    // Remove the camera statuses that should be hidden from the client, we do
+    // this after collecting the states in order to avoid holding
+    // mCameraStatesLock and mInterfaceLock (held in
+    // isPublicallyHiddenSecureCamera()) at the same time.
+    cameraStatuses->erase(std::remove_if(cameraStatuses->begin(), cameraStatuses->end(),
+                [this, &isVendorListener](const hardware::CameraStatus& s) {
+                    bool ret = !isVendorListener && isPublicallyHiddenSecureCamera(s.cameraId);
+                    if (ret) {
+                        ALOGV("Cannot add public listener for hidden system-only %s for pid %d",
+                                s.cameraId.c_str(), CameraThreadState::getCallingPid());
+                    }
+                    return ret;
+                }),
+                cameraStatuses->end());
 
     /*
      * Immediately signal current torch status to this listener only
@@ -2227,39 +2262,80 @@ sp<MediaPlayer> CameraService::newMediaPlayer(const char *file) {
     return mp;
 }
 
-void CameraService::increaseSoundRef() {
-    Mutex::Autolock lock(mSoundLock);
-    mSoundRef++;
-}
-
-void CameraService::loadSoundLocked(sound_kind kind) {
+//!++
+void CameraService::loadSound() {
     ATRACE_CALL();
 
-    LOG1("CameraService::loadSoundLocked ref=%d", mSoundRef);
-    if (SOUND_SHUTTER == kind && mSoundPlayer[SOUND_SHUTTER] == NULL) {
-        mSoundPlayer[SOUND_SHUTTER] = newMediaPlayer("/product/media/audio/ui/camera_click.ogg");
-        if (mSoundPlayer[SOUND_SHUTTER] == nullptr) {
-            mSoundPlayer[SOUND_SHUTTER] = newMediaPlayer("/system/media/audio/ui/camera_click.ogg");
-        }
-    } else if (SOUND_RECORDING_START == kind && mSoundPlayer[SOUND_RECORDING_START] ==  NULL) {
-        mSoundPlayer[SOUND_RECORDING_START] = newMediaPlayer("/product/media/audio/ui/VideoRecord.ogg");
-        if (mSoundPlayer[SOUND_RECORDING_START] == nullptr) {
-            mSoundPlayer[SOUND_RECORDING_START] =
-                newMediaPlayer("/system/media/audio/ui/VideoRecord.ogg");
-        }
-    } else if (SOUND_RECORDING_STOP == kind && mSoundPlayer[SOUND_RECORDING_STOP] == NULL) {
-        mSoundPlayer[SOUND_RECORDING_STOP] = newMediaPlayer("/product/media/audio/ui/VideoStop.ogg");
-        if (mSoundPlayer[SOUND_RECORDING_STOP] == nullptr) {
-            mSoundPlayer[SOUND_RECORDING_STOP] = newMediaPlayer("/system/media/audio/ui/VideoStop.ogg");
-        }
+    Mutex::Autolock lock(mSoundLock);
+    LOG1("CameraService::loadSound ref=%d", mSoundRef);
+    if (mSoundRef++) return;
+    //!++
+    #if 0
+    mSoundPlayer[SOUND_SHUTTER] = newMediaPlayer("/system/media/audio/ui/camera_click.ogg");
+    mSoundPlayer[SOUND_RECORDING_START] = newMediaPlayer("/system/media/audio/ui/VideoRecord.ogg");
+    mSoundPlayer[SOUND_RECORDING_STOP] = newMediaPlayer("/system/media/audio/ui/VideoStop.ogg");
+    #else
+    if( pthread_create(&mloadSoundTThreadHandle, NULL, loadSoundThread, this) != 0 )
+    {
+        ALOGE("loadSound pthread create failed");
     }
+    #endif
+    //!--
 }
 
-void CameraService::decreaseSoundRef() {
+void CameraService::loadSoundImp() {
+    LOG1("[CameraService::loadSoundImp] E");
+
+    mSoundPlayer[SOUND_SHUTTER] = newMediaPlayer("/product/media/audio/ui/camera_click.ogg");
+    if (mSoundPlayer[SOUND_SHUTTER] == nullptr) {
+          mSoundPlayer[SOUND_SHUTTER] = newMediaPlayer("/system/media/audio/ui/camera_click.ogg");
+       }
+
+    mSoundPlayer[SOUND_RECORDING_START] = newMediaPlayer("/product/media/audio/ui/VideoRecord.ogg");
+    if (mSoundPlayer[SOUND_RECORDING_START] == nullptr) {
+          mSoundPlayer[SOUND_RECORDING_START] = newMediaPlayer("/system/media/audio/ui/VideoRecord.ogg");
+       }
+
+    mSoundPlayer[SOUND_RECORDING_STOP] = newMediaPlayer("/product/media/audio/ui/VideoStop.ogg");
+    if (mSoundPlayer[SOUND_RECORDING_STOP] == nullptr) {
+          mSoundPlayer[SOUND_RECORDING_STOP] = newMediaPlayer("/system/media/audio/ui/VideoStop.ogg");
+       }
+
+    LOG1("[CameraService::loadSoundImp] X");
+}
+
+bool CameraService::waitloadSoundDone() {
+    if(mloadSoundTThreadHandle != 0)
+    {
+        LOG1("CameraService::waitloadSoundDone E");
+        int s = pthread_join(mloadSoundTThreadHandle, NULL);
+        mloadSoundTThreadHandle = 0;
+        LOG1("CameraService::waitloadSoundDone X");
+        if( s != 0 )
+        {
+            ALOGE("loadSound pthread join error: %d", s);
+            return false;
+        }
+    }
+    return true;
+}
+
+void* CameraService::loadSoundThread(void* arg) {
+    LOG1("[CameraService::loadSoundThread]");
+    CameraService* pCameraService = (CameraService*)arg;
+    pCameraService->loadSoundImp();
+    pthread_exit(NULL);
+    return NULL;
+}
+
+void CameraService::releaseSound() {
     Mutex::Autolock lock(mSoundLock);
-    LOG1("CameraService::decreaseSoundRef ref=%d", mSoundRef);
+    LOG1("CameraService::releaseSound ref=%d", mSoundRef);
     if (--mSoundRef) return;
 
+    //!++
+    waitloadSoundDone();
+    //!--
     for (int i = 0; i < NUM_SOUNDS; i++) {
         if (mSoundPlayer[i] != 0) {
             mSoundPlayer[i]->disconnect();
@@ -2267,13 +2343,16 @@ void CameraService::decreaseSoundRef() {
         }
     }
 }
+//!--
 
 void CameraService::playSound(sound_kind kind) {
     ATRACE_CALL();
 
     LOG1("playSound(%d)", kind);
     Mutex::Autolock lock(mSoundLock);
-    loadSoundLocked(kind);
+    //!++
+    waitloadSoundDone();
+    //!--
     sp<MediaPlayer> player = mSoundPlayer[kind];
     if (player != 0) {
         player->seekTo(0);
@@ -2303,8 +2382,9 @@ CameraService::Client::Client(const sp<CameraService>& cameraService,
 
     mRemoteCallback = cameraClient;
 
-    cameraService->increaseSoundRef();
-
+    //!++
+    cameraService->loadSound();
+    //!--
     LOG1("Client::Client X (pid %d, id %d)", callingPid, mCameraId);
 }
 
@@ -2313,7 +2393,10 @@ CameraService::Client::~Client() {
     ALOGV("~Client");
     mDestructionStarted = true;
 
-    sCameraService->decreaseSoundRef();
+    //!++
+    sCameraService->releaseSound();
+    //!--
+
     // unconditionally disconnect. function is idempotent
     Client::disconnect();
 }
@@ -2872,8 +2955,9 @@ void CameraService::SensorPrivacyPolicy::binderDied(const wp<IBinder>& /*who*/) 
 // ----------------------------------------------------------------------------
 
 CameraService::CameraState::CameraState(const String8& id, int cost,
-        const std::set<String8>& conflicting) : mId(id),
-        mStatus(StatusInternal::NOT_PRESENT), mCost(cost), mConflicting(conflicting) {}
+        const std::set<String8>& conflicting, bool isHidden) : mId(id),
+        mStatus(StatusInternal::NOT_PRESENT), mCost(cost), mConflicting(conflicting),
+        mIsPublicallyHiddenSecureCamera(isHidden) {}
 
 CameraService::CameraState::~CameraState() {}
 
@@ -2900,6 +2984,10 @@ std::set<String8> CameraService::CameraState::getConflicting() const {
 
 String8 CameraService::CameraState::getId() const {
     return mId;
+}
+
+bool CameraService::CameraState::isPublicallyHiddenSecureCamera() const {
+    return mIsPublicallyHiddenSecureCamera;
 }
 
 // ----------------------------------------------------------------------------
@@ -3237,10 +3325,10 @@ void CameraService::updateStatus(StatusInternal status, const String8& cameraId,
                 cameraId.string());
         return;
     }
-
+    bool isHidden = isPublicallyHiddenSecureCamera(cameraId);
     // Update the status for this camera state, then send the onStatusChangedCallbacks to each
     // of the listeners with both the mStatusStatus and mStatusListenerLock held
-    state->updateStatus(status, cameraId, rejectSourceStates, [this]
+    state->updateStatus(status, cameraId, rejectSourceStates, [this,&isHidden]
             (const String8& cameraId, StatusInternal status) {
 
             if (status != StatusInternal::ENUMERATING) {
@@ -3262,8 +3350,7 @@ void CameraService::updateStatus(StatusInternal status, const String8& cameraId,
             Mutex::Autolock lock(mStatusListenerLock);
 
             for (auto& listener : mListenerList) {
-                if (!listener.first &&
-                    mCameraProviderManager->isPublicallyHiddenSecureCamera(cameraId.c_str())) {
+                if (!listener.first &&  isHidden) {
                     ALOGV("Skipping camera discovery callback for system-only camera %s",
                           cameraId.c_str());
                     continue;

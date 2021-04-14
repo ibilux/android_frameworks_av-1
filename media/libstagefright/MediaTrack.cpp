@@ -25,6 +25,8 @@
 #include <media/NdkMediaErrorPriv.h>
 #include <media/NdkMediaFormatPriv.h>
 
+#include "MetaDataBase_MTK.h"
+
 namespace android {
 
 MediaTrack::MediaTrack() {}
@@ -158,6 +160,15 @@ status_t MediaTrackCUnwrapper::read(MediaBufferBase **buffer, const ReadOptions 
         if (format->mFormat->findInt32("valid-samples", &val32)) {
             meta.setInt32(kKeyValidSamples, val32);
         }
+#ifdef MSSI_MTK_AUDIO_APE_SUPPORT
+        if (format->mFormat->findInt32("Nem-Frame", &val32)) {
+            meta.setInt32(kKeynewframe, val32);
+        }
+        if (format->mFormat->findInt32("Seek-Byte", &val32)) {
+            meta.setInt32(kKeyseekbyte, val32);
+        }
+#endif
+
         sp<ABuffer> valbuf;
         if (format->mFormat->findBuffer("crypto-plain-sizes", &valbuf)) {
             meta.setData(kKeyPlainSizes,

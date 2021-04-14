@@ -504,7 +504,11 @@ status_t AudioFlinger::PatchPanel::Patch::createConnections(PatchPanel *panel)
         // "reuse one existing output mix" case
         streamType = mAudioPatch.sources[1].ext.mix.usecase.stream;
     }
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS04725017: check fast track slots
+    if (mPlayback.thread()->hasFastMixer() && mPlayback.thread()->mFastTrackAvailMask != 0) {
+#else
     if (mPlayback.thread()->hasFastMixer()) {
+#endif
         // Create a fast track if the playback thread has fast mixer to get better performance.
         // Note: we should have matching channel mask, sample rate, and format by the logic above.
         outputFlags = (audio_output_flags_t) (outputFlags | AUDIO_OUTPUT_FLAG_FAST);

@@ -26,6 +26,7 @@ cc_library_shared {
         "-fvisibility=hidden",
         "-Wall",
         "-Werror",
+        "-DMTK_AUDIO_FIX_DEFAULT_DEFECT",
     ],
 
     header_libs: [

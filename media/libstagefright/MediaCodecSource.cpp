@@ -50,6 +50,12 @@ const int kStopTimeoutUs = 300000; // allow 1 sec for shutting down encoder
 // input source.
 const int kMaxStopTimeOffsetUs = 1000000;
 
+
+static const uint32_t kQueuedBufferMax = 100;  // default queue about 1s datas before drop frames
+static const uint32_t kDropCountOnce = 30;
+
+
+
 struct MediaCodecSource::Puller : public AHandler {
     explicit Puller(const sp<MediaSource> &source);
 
@@ -126,6 +132,15 @@ MediaCodecSource::Puller::~Puller() {
 
 void MediaCodecSource::Puller::Queue::pushBuffer(MediaBufferBase *mbuf) {
     mReadBuffers.push_back(mbuf);
+    if (mReadBuffers.size() > kQueuedBufferMax + kDropCountOnce) {
+        ALOGW("Queued buffers(%zu) > %u, dropped frames!!", mReadBuffers.size(), kQueuedBufferMax + kDropCountOnce);
+        MediaBufferBase *mbuffer;
+        while (mReadBuffers.size() > kQueuedBufferMax) {
+            if (readBuffer(&mbuffer)) {
+                mbuffer->release();
+            }
+        }
+    }
 }
 
 bool MediaCodecSource::Puller::Queue::readBuffer(MediaBufferBase **mbuf) {
@@ -168,13 +183,22 @@ status_t MediaCodecSource::Puller::postSynchronouslyAndReturnError(
 }
 
 status_t MediaCodecSource::Puller::setStopTimeUs(int64_t stopTimeUs) {
+//  comment google code
+/*
     sp<AMessage> msg = new AMessage(kWhatSetStopTimeUs, this);
     msg->setInt64("stop-time-us", stopTimeUs);
     return postSynchronouslyAndReturnError(msg);
+*/
+//  add for mtk
+//  decouple control flow and data flow
+    ALOGD("puller (%s) setStopTimeUs: %lld", mIsAudio ? "audio" : "video", (long long)stopTimeUs);
+    status_t err = mSource->setStopTimeUs(stopTimeUs);
+    return err;
+//  ~add for mtk
 }
 
 status_t MediaCodecSource::Puller::start(const sp<MetaData> &meta, const sp<AMessage> &notify) {
-    ALOGV("puller (%s) start", mIsAudio ? "audio" : "video");
+    ALOGD("puller (%s) start", mIsAudio ? "audio" : "video");
     mLooper->start(
             false /* runOnCallingThread */,
             false /* canCallJava */,
@@ -188,19 +212,12 @@ status_t MediaCodecSource::Puller::start(const sp<MetaData> &meta, const sp<AMes
 }
 
 void MediaCodecSource::Puller::stop() {
-    bool interrupt = false;
-    {
-        // mark stopping before actually reaching kWhatStop on the looper, so the pulling will
-        // stop.
-        Mutexed<Queue>::Locked queue(mQueue);
-        queue->mPulling = false;
-        interrupt = queue->mReadPendingSince && (queue->mReadPendingSince < ALooper::GetNowUs() - 1000000);
-        queue->flush(); // flush any unprocessed pulled buffers
-    }
-
-    if (interrupt) {
-        interruptSource();
-    }
+    ALOGD("[%s %d] Puller (%s) stop", __FUNCTION__, __LINE__, mIsAudio ? "audio" : "video");
+    // mark stopping before actually reaching kWhatStop on the looper, so the pulling will
+    // stop.
+    Mutexed<Queue>::Locked queue(mQueue);
+    queue->mPulling = false;
+    queue->flush(); // flush any unprocessed pulled buffers
 }
 
 void MediaCodecSource::Puller::interruptSource() {
@@ -210,6 +227,7 @@ void MediaCodecSource::Puller::interruptSource() {
 }
 
 void MediaCodecSource::Puller::stopSource() {
+    ALOGD("[%s %d] Puller (%s) posting kWhatStop", __FUNCTION__, __LINE__, mIsAudio ? "audio" : "video");
     sp<AMessage> msg = new AMessage(kWhatStop, this);
     (void)postSynchronouslyAndReturnError(msg);
 }
@@ -217,6 +235,7 @@ void MediaCodecSource::Puller::stopSource() {
 void MediaCodecSource::Puller::pause() {
     Mutexed<Queue>::Locked queue(mQueue);
     queue->mPaused = true;
+    queue->flush();
 }
 
 void MediaCodecSource::Puller::resume() {
@@ -295,6 +314,8 @@ void MediaCodecSource::Puller::onMessageReceived(const sp<AMessage> &msg) {
             queue->mReadPendingSince = ALooper::GetNowUs();
             if (!queue->mPulling) {
                 handleEOS();
+                ALOGD("[%s %d] puller (%s) posting EOS", __FUNCTION__, __LINE__,
+                    mIsAudio ? "audio" : "video");
                 break;
             }
 
@@ -330,6 +351,8 @@ void MediaCodecSource::Puller::onMessageReceived(const sp<AMessage> &msg) {
                 mNotify->post();
                 msg->post();
             } else {
+                ALOGD("[%s %d] puller (%s) posting EOS", __FUNCTION__, __LINE__,
+                    mIsAudio ? "audio" : "video");
                 handleEOS();
             }
             break;
@@ -362,6 +385,7 @@ sp<MediaCodecSource> MediaCodecSource::Create(
 }
 
 status_t MediaCodecSource::setInputBufferTimeOffset(int64_t timeOffsetUs) {
+    ALOGD("%s setInputBufferTimeOffset: %lld", mIsVideo?"Video":"Audio", (long long)timeOffsetUs);
     sp<AMessage> msg = new AMessage(kWhatSetInputBufferTimeOffset, mReflector);
     msg->setInt64(PARAMETER_KEY_OFFSET_TIME, timeOffsetUs);
     return postSynchronouslyAndReturnError(msg);
@@ -379,24 +403,30 @@ int64_t MediaCodecSource::getFirstSampleSystemTimeUs() {
 }
 
 status_t MediaCodecSource::start(MetaData* params) {
+    ALOGD("%s start params=%s", mIsVideo?"Video":"Audio",
+        params!=nullptr ? params->toString().c_str() : "NULL");
     sp<AMessage> msg = new AMessage(kWhatStart, mReflector);
     msg->setObject("meta", params);
     return postSynchronouslyAndReturnError(msg);
 }
 
 status_t MediaCodecSource::stop() {
+    ALOGD("%s stop", mIsVideo?"Video":"Audio");
     sp<AMessage> msg = new AMessage(kWhatStop, mReflector);
     return postSynchronouslyAndReturnError(msg);
 }
 
 
 status_t MediaCodecSource::setStopTimeUs(int64_t stopTimeUs) {
+    ALOGD("%s setStopTimeUs: %lld", mIsVideo?"Video":"Audio", (long long)stopTimeUs);
     sp<AMessage> msg = new AMessage(kWhatSetStopTimeUs, mReflector);
     msg->setInt64("stop-time-us", stopTimeUs);
     return postSynchronouslyAndReturnError(msg);
 }
 
 status_t MediaCodecSource::pause(MetaData* params) {
+    ALOGD("%s pause params=%s", mIsVideo?"Video":"Audio",
+        params!=nullptr ? params->toString().c_str() : "NULL");
     sp<AMessage> msg = new AMessage(kWhatPause, mReflector);
     msg->setObject("meta", params);
     msg->post();
@@ -457,6 +487,10 @@ MediaCodecSource::MediaCodecSource(
       mPausePending(false),
       mFirstSampleTimeUs(-1LL),
       mGeneration(0) {
+// add for mtk avoid timeUs back when resume after pause.
+    mLastTimeUs = -1ll;
+    mFrameDropped = false;
+// ~add for mtk
     CHECK(mLooper != NULL);
 
     if (!(mFlags & FLAG_USE_SURFACE_INPUT)) {
@@ -635,7 +669,7 @@ void MediaCodecSource::signalEOS(status_t err) {
         Mutexed<Output>::Locked output(mOutput);
         reachedEOS = output->mEncoderReachedEOS;
         if (!reachedEOS) {
-            ALOGV("encoder (%s) reached EOS", mIsVideo ? "video" : "audio");
+            ALOGD("encoder (%s) reached EOS", mIsVideo ? "video" : "audio");
             // release all unread media buffers
             for (List<MediaBufferBase*>::iterator it = output->mBufferQueue.begin();
                     it != output->mBufferQueue.end(); it++) {
@@ -656,12 +690,13 @@ void MediaCodecSource::signalEOS(status_t err) {
         }
     }
 
+
     if (mStopping && reachedEOS) {
         ALOGI("encoder (%s) stopped", mIsVideo ? "video" : "audio");
         if (mPuller != NULL) {
-            mPuller->stopSource();
+            mPuller->interruptSource();
         }
-        ALOGV("source (%s) stopped", mIsVideo ? "video" : "audio");
+        ALOGD("puller (%s) stopped", mIsVideo ? "video" : "audio");
         // posting reply to everyone that's waiting
         List<sp<AReplyToken>>::iterator it;
         for (it = mStopReplyIDQueue.begin();
@@ -711,6 +746,16 @@ status_t MediaCodecSource::feedEncoderInputBuffers() {
 
             timeUs += mInputBufferTimeOffsetUs;
 
+// add for mtk avoid timeUs back when resume after pause.
+            if (timeUs <= mLastTimeUs) {
+                ALOGW("%s mLastTimeUs(%lld us)>= timeUs(%lld us),release buffer!!!",
+                        mIsVideo ? "video" : "audio", (long long)mLastTimeUs, (long long)timeUs);
+                mbuf->release();
+                mAvailEncoderInputIndices.push_back(bufferIndex);  // available input buffer not use, push back
+                continue;
+            }
+//  ~add for mtk
+
             // push decoding time for video, or drift time for audio
             if (mIsVideo) {
                 mDecodingTimeQueue.push_back(timeUs);
@@ -734,6 +779,7 @@ status_t MediaCodecSource::feedEncoderInputBuffers() {
             if (err != OK || inbuf == NULL || inbuf->data() == NULL
                     || mbuf->data() == NULL || mbuf->size() == 0) {
                 mbuf->release();
+                ALOGD("[%s %d] (%s) signalEOS", __FUNCTION__, __LINE__, mIsVideo ? "video" : "audio");
                 signalEOS();
                 break;
             }
@@ -756,7 +802,9 @@ status_t MediaCodecSource::feedEncoderInputBuffers() {
 
         status_t err = mEncoder->queueInputBuffer(
                 bufferIndex, 0, size, timeUs, flags);
-
+// add for mtk avoid timeUs back when resume after pause.
+        mLastTimeUs = timeUs;
+//  ~add for mtk
         if (err != OK) {
             return err;
         }
@@ -838,6 +886,8 @@ void MediaCodecSource::onPause(int64_t pauseStartTimeUs) {
         params->setInt32(PARAMETER_KEY_SUSPEND, true);
         params->setInt64(PARAMETER_KEY_SUSPEND_TIME, pauseStartTimeUs);
         mEncoder->setParameters(params);
+    } else if ((mFlags & FLAG_USE_SURFACE_INPUT) && (mEncoder == NULL)) {
+        // Nothing to do
     } else {
         CHECK(mPuller != NULL);
         mPuller->pause();
@@ -851,6 +901,7 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
         int32_t eos = 0;
         if (msg->findInt32("eos", &eos) && eos) {
             ALOGV("puller (%s) reached EOS", mIsVideo ? "video" : "audio");
+            ALOGD("[%s %d] (%s) signalEOS", __FUNCTION__, __LINE__, mIsVideo ? "video" : "audio");
             signalEOS();
             break;
         }
@@ -880,6 +931,7 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
         } else if (cbID == MediaCodec::CB_OUTPUT_FORMAT_CHANGED) {
             status_t err = mEncoder->getOutputFormat(&mOutputFormat);
             if (err != OK) {
+                ALOGD("[%s %d] signalEOS", __FUNCTION__, __LINE__);
                 signalEOS(err);
                 break;
             }
@@ -901,6 +953,7 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
 
             if (flags & MediaCodec::BUFFER_FLAG_EOS) {
                 mEncoder->releaseOutputBuffer(index);
+                ALOGD("[%s %d] (%s) signalEOS", __FUNCTION__, __LINE__, mIsVideo ? "video" : "audio");
                 signalEOS();
                 break;
             }
@@ -909,6 +962,7 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
             status_t err = mEncoder->getOutputBuffer(index, &outbuf);
             if (err != OK || outbuf == NULL || outbuf->data() == NULL
                 || outbuf->size() == 0) {
+                ALOGD("[%s %d] (%s) signalEOS", __FUNCTION__, __LINE__, mIsVideo ? "video" : "audio");
                 signalEOS();
                 break;
             }
@@ -933,6 +987,30 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
                         // Timestamp offset is already adjusted in GraphicBufferSource.
                         // GraphicBufferSource is supposed to discard samples
                         // queued before start, and offset timeUs by start time
+// add for mtk avoid timeUs back when resume after pause.
+                        if (timeUs <= mLastTimeUs) {
+                            ALOGW("video mLastTimeUs(%lld us)> timeUs(%lld us),release buffer!!!",
+                                    (long long)mLastTimeUs, (long long)timeUs);
+                            mbuf->release();
+                            mEncoder->releaseOutputBuffer(index);
+                            mFrameDropped = true;
+                            mEncoder->requestIDRFrame();
+                            break;
+                        } else {
+                            int32_t isSync = false;
+                            if (flags & MediaCodec::BUFFER_FLAG_SYNCFRAME) {
+                                isSync = true;
+                            }
+                            if (mFrameDropped && !isSync) {
+                                ALOGD("Wait IDR frame after droped video frames");
+                                mbuf->release();
+                                mEncoder->releaseOutputBuffer(index);
+                                break;
+                            }
+                            mFrameDropped = false;
+                        }
+
+//  ~add for mtk
                         CHECK_GE(timeUs, 0LL);
                         // TODO:
                         // Decoding time for surface source is unavailable,
@@ -943,6 +1021,10 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
                         CHECK(!mDecodingTimeQueue.empty());
                         decodingTimeUs = *(mDecodingTimeQueue.begin());
                         mDecodingTimeQueue.erase(mDecodingTimeQueue.begin());
+                        if (timeUs != decodingTimeUs) {
+                            ALOGD("Abnormal timeUs(%lld) != decodingTimeUs(%lld)",
+                                (long long)timeUs, (long long)decodingTimeUs);
+                        }
                     }
                     mbuf->meta_data().setInt64(kKeyDecodingTime, decodingTimeUs);
 
@@ -960,6 +1042,11 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
                             timeUs, timeUs / 1E6, driftTimeUs);
                 }
                 mbuf->meta_data().setInt64(kKeyTime, timeUs);
+// add for mtk avoid timeUs back when resume after pause.
+                if (mFlags & FLAG_USE_SURFACE_INPUT) {
+                    mLastTimeUs = timeUs;
+                }
+//  ~add for mtk
             } else {
                 mbuf->meta_data().setInt64(kKeyTime, 0LL);
                 mbuf->meta_data().setInt32(kKeyIsCodecConfig, true);
@@ -985,6 +1072,7 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
                 mStopping = true;
                 mPuller->stop();
             }
+            ALOGD("[%s %d] signalEOS", __FUNCTION__, __LINE__);
             signalEOS();
        }
        break;
@@ -1005,7 +1093,7 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
     }
     case kWhatStop:
     {
-        ALOGI("encoder (%s) stopping", mIsVideo ? "video" : "audio");
+        ALOGI("kWhatStop (%s) received", mIsVideo ? "video" : "audio");
 
         sp<AReplyToken> replyID;
         CHECK(msg->senderAwaitsResponse(&replyID));
@@ -1063,17 +1151,14 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
 
     case kWhatStopStalled:
     {
+        ALOGI("kWhatStop (%s) received", mIsVideo ? "video" : "audio");
         int32_t generation;
         CHECK(msg->findInt32("generation", &generation));
         if (generation != mGeneration) {
              break;
         }
 
-        if (!(mFlags & FLAG_USE_SURFACE_INPUT)) {
-            ALOGV("source (%s) stopping", mIsVideo ? "video" : "audio");
-            mPuller->interruptSource();
-            ALOGV("source (%s) stopped", mIsVideo ? "video" : "audio");
-        }
+        ALOGD("[%s %d] (%s) signalEOS", __FUNCTION__, __LINE__, mIsVideo ? "video" : "audio");
         signalEOS();
         break;
     }

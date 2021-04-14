@@ -87,6 +87,9 @@ public:
     void setEffectSuspended(int effectId __unused,
                             audio_session_t sessionId __unused,
                             bool suspended __unused) {}
+
+    /* MTK_AUDIO */
+    status_t getCustomAudioVolume(void* /*pCustomVol*/) override {  return NO_INIT; }
 };
 
 } // namespace android

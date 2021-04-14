@@ -56,6 +56,11 @@ LOCAL_SHARED_LIBRARIES :=  \
     libutils \
     liblog
 
+ifeq ($(MTK_AUDIO),yes)
+    LOCAL_CFLAGS += -DMTK_AUDIO_DEBUG
+    LOCAL_SHARED_LIBRARIES += libaudioutilmtk
+endif
+
 include $(BUILD_SHARED_LIBRARY)
 
 

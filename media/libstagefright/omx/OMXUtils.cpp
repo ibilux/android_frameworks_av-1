@@ -162,6 +162,18 @@ const char *GetComponentRole(bool isEncoder, const char *mime) {
             "audio_decoder.gsm", "audio_encoder.gsm" },
         { MEDIA_MIMETYPE_VIDEO_MPEG2,
             "video_decoder.mpeg2", "video_encoder.mpeg2" },
+// +++ mtk add support wmv/divx/divx3/xvid/s263 decoder
+        { "video/x-ms-wmv",
+            "video_decoder.wmv", "video_encoder.wmv" },
+        { "video/divx",
+            "video_decoder.divx", "video_encoder.divx" },
+        { "video/divx3",
+            "video_decoder.divx3", "video_encoder.divx3" },
+        { "video/xvid",
+            "video_decoder.xvid", "video_encoder.xvid" },
+        { "video/flv1",
+            "video_decoder.s263", "video_encoder.s263" },
+// --- mtk add support wmv/divx/divx3/xvid/s263 decoder
         { MEDIA_MIMETYPE_AUDIO_AC3,
             "audio_decoder.ac3", "audio_encoder.ac3" },
         { MEDIA_MIMETYPE_AUDIO_EAC3,
@@ -172,6 +184,30 @@ const char *GetComponentRole(bool isEncoder, const char *mime) {
             "audio_decoder.ac4", "audio_encoder.ac4" },
         { MEDIA_MIMETYPE_IMAGE_ANDROID_HEIC,
             "image_decoder.heic", "image_encoder.heic" },
+
+#ifdef MSSI_MTK_AUDIO_APE_SUPPORT
+        { "audio/ape",
+            "audio_decoder.ape", "audio_encoder.ape" },
+#endif
+
+#ifdef MSSI_MTK_AUDIO_ADPCM_SUPPORT
+        { "audio/x-adpcm-ms",
+            "audio_decoder.adpcm", "audio_encoder.adpcm" },
+        { "audio/x-adpcm-dvi-ima",
+            "audio_decoder.adpcm.dvi", "audio_encoder.adpcm.dvi" },
+#endif
+#ifdef MSSI_MTK_WMA_PLAYBACK_SUPPORT
+        { "audio/x-ms-wma",
+            "audio_decoder.wma", "audio_encoder.wma" },
+#ifdef MSSI_MTK_SWIP_WMAPRO
+        { "audio/x-ms-wmapro",
+            "audio_decoder.wmapro", "audio_encoder.wmapro" },
+#endif
+#endif
+#ifdef MSSI_MTK_AUDIO_ALAC_SUPPORT
+        { "audio/alac",
+            "audio_decoder.alac", "audio_encoder.alac"},
+#endif
     };
 
     static const size_t kNumMimeToRole =

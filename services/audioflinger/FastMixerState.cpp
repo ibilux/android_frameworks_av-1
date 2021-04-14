@@ -24,7 +24,10 @@ namespace android {
 
 FastTrack::FastTrack() :
     mBufferProvider(NULL), mVolumeProvider(NULL),
-    mChannelMask(AUDIO_CHANNEL_OUT_STEREO), mFormat(AUDIO_FORMAT_INVALID), mGeneration(0)
+    mChannelMask(AUDIO_CHANNEL_OUT_STEREO), mFormat(AUDIO_FORMAT_INVALID), mGeneration(0),
+// <MTK_AUDIOMIXER_ENABLE_DRC // ALPS04408933 low latency support drc
+    mStreamType(AUDIO_STREAM_DEFAULT), mOutputDevice(AUDIO_DEVICE_NONE)
+// MTK_AUDIOMIXER_ENABLE_DRC>
 {
 }
 
@@ -35,7 +38,14 @@ FastTrack::~FastTrack()
 FastMixerState::FastMixerState() : FastThreadState(),
     // mFastTracks
     mFastTracksGen(0), mTrackMask(0), mOutputSink(NULL), mOutputSinkGen(0),
-    mFrameCount(0)
+    mFrameCount(0),
+// <MTK_AUDIOMIXER_ENABLE_DRC // ALPS04408933 low latency support drc
+    mDRCEnable(false),
+    mDRCEnableGen(0),
+    mUpdateACFHCFParamGen(0),
+    mCustomScene(String8("")),
+    mUpdateCustomSceneParamGen(0)
+// MTK_AUDIOMIXER_ENABLE_DRC>
 {
     int ok = pthread_once(&sMaxFastTracksOnce, sMaxFastTracksInit);
     if (ok != 0) {

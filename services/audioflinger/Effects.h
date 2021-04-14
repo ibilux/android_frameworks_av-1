@@ -206,7 +206,6 @@ mutable Mutex               mLock;      // mutex for process, commands and handl
     static constexpr pid_t INVALID_PID = (pid_t)-1;
     // this tid is allowed to call setVolume() without acquiring the mutex.
     pid_t mSetVolumeReentrantTid = INVALID_PID;
-
     // Audio policy effect state management
     // Mutex protecting transactions with audio policy manager as mLock cannot
     // be held to avoid cross deadlocks with audio policy mutex
@@ -216,6 +215,11 @@ mutable Mutex               mLock;      // mutex for process, commands and handl
     // Effect enabled state communicated to APM. Enabled state corresponds to
     // state requested by the EffectHandle with control
     bool    mPolicyEnabled = false;
+
+    //fix audio effect on/off noise
+        void setFirstVolume( bool firstVolume );
+        bool mFirstVolCtrl;
+        bool mFirstVolume;
 };
 
 // The EffectHandle class implements the IEffect interface. It provides resources

@@ -38,6 +38,7 @@
 #include <media/stagefright/MetaData.h>
 #include <media/stagefright/Utils.h>
 #include <media/CharacterEncodingDetector.h>
+#include <stagefright/AVStageExtensions.h>
 
 namespace android {
 
@@ -107,6 +108,9 @@ status_t StagefrightMetadataRetriever::setDataSource(
 
         return UNKNOWN_ERROR;
     }
+
+    ALOGD("setDataSource fd=%d (%s), offset=%lld, length=%lld",
+            fd, nameForFd(fd).c_str(), (long long) offset, (long long) length);
 
     return OK;
 }
@@ -208,11 +212,46 @@ sp<IMemory> StagefrightMetadataRetriever::getImageInternal(
     CHECK(trackMeta->findCString(kKeyMIMEType, &mime));
     ALOGV("extracting from %s track", mime);
     if (!strcasecmp(mime, MEDIA_MIMETYPE_IMAGE_ANDROID_HEIC)) {
-        mime = MEDIA_MIMETYPE_VIDEO_HEVC;
-        trackMeta = new MetaData(*trackMeta);
-        trackMeta->setCString(kKeyMIMEType, mime);
-    }
+        int32_t gridCols;
+        if (trackMeta->findInt32(kKeyGridCols, &gridCols)) {
+            ALOGD("find gridCols %d", gridCols);
+        } else {
+            gridCols = 0;
+        }
 
+        Vector<AString> matchingCodecs;
+        MediaCodecList::findMatchingCodecs(
+                mime,
+                false, /* encoder */
+                0,
+                &matchingCodecs);
+        ALOGD("find heic codec matchingCodecs size is %zu, expect 1 if supported", matchingCodecs.size());
+        if (!thumbnail && (matchingCodecs.size() == 1) && gridCols >1) {
+            ALOGD("codec name %s", matchingCodecs[0].c_str());
+            const AString &componentName = matchingCodecs[0];
+            sp<ImageDecoder> decoder = AVStageFactory::get()->createImageDecoder(componentName, trackMeta, source);
+//            sp<HeicDecoder> decoder = new HeicDecoder(componentName, trackMeta, source);
+            int64_t frameTimeUs = 0;
+            if (decoder->init(frameTimeUs, 1 /*numFrames*/, 0 /*option*/, colorFormat) == OK) {
+                sp<IMemory> frame = decoder->extractFrame(rect);
+
+                if (frame != NULL) {
+                    if (rect != NULL) {
+                        // keep the decoder if slice decoding
+                        mImageDecoder = decoder;
+                        mLastImageIndex = index;
+                    }
+                    return frame;
+                }
+            }
+            return NULL;
+        } else {
+            mime = MEDIA_MIMETYPE_VIDEO_HEVC;
+            trackMeta = new MetaData(*trackMeta);
+            trackMeta->setCString(kKeyMIMEType, mime);
+            ALOGD("thumbnail mode or no HEIC codec or only one grid,try to use HEVC codec");
+        }
+    }
     bool preferhw = property_get_bool(
             "media.stagefright.thumbnail.prefer_hw_codecs", false);
     uint32_t flags = preferhw ? 0 : MediaCodecList::kPreferSoftwareCodecs;

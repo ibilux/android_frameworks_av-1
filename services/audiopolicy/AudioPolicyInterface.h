@@ -244,6 +244,16 @@ public:
     virtual status_t setMasterMono(bool mono) = 0;
     virtual status_t getMasterMono(bool *mono) = 0;
 
+    // MTK_AUDIO - begin
+    virtual status_t setPolicyManagerParameters(int par1, int par2, int par3, int par4) = 0;
+
+    virtual status_t startOutputSamplerate(audio_port_handle_t portId,
+                                           int samplerate) = 0;
+    virtual status_t stopOutputSamplerate(audio_port_handle_t portId,
+                                          int samplerate) = 0;
+
+    // MTK_AUDIO - end
+
     virtual float    getStreamVolumeDB(
                 audio_stream_type_t stream, int index, audio_devices_t device) = 0;
 
@@ -383,6 +393,8 @@ public:
                                                 std::vector<effect_descriptor_t> effects,
                                                 audio_patch_handle_t patchHandle,
                                                 audio_source_t source) = 0;
+    /* MTK_AUDIO */
+    virtual status_t getCustomAudioVolume(void* pCustomVol) = 0;
 };
 
 extern "C" AudioPolicyInterface* createAudioPolicyManager(AudioPolicyClientInterface *clientInterface);

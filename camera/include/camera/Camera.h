@@ -203,6 +203,12 @@ protected:
     sp<ICameraRecordingProxyListener>  mRecordingProxyListener;
 
     friend class        CameraBase;
+
+//!++
+public:
+    static status_t     setProperty(String8 const& key, String8 const& value);
+    static status_t     getProperty(String8 const& key, String8& value);
+//!--
 };
 
 }; // namespace android

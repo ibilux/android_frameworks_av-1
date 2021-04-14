@@ -212,7 +212,26 @@ enum media_recorder_info_type {
     MEDIA_RECORDER_TRACK_INFO_DATA_KBYTES          = 1009,
 
     MEDIA_RECORDER_TRACK_INFO_LIST_END             = 2000,
+
+    // add for mtk, set mtk added media infos.
+    MEDIA_RECORDER_INFO_RECORDING_SIZE             = 895,
+    MEDIA_RECORDER_INFO_START_TIMER                = 1998,
+    MEDIA_RECORDER_INFO_CAMERA_RELEASE             = 1999,
+    // end of add for mtk
 };
+
+// add for mtk, set mtk added media infos.
+/* add for mtk defined infos in mediarecorder.h.
+media recorder info flags, used to check if ap set the parameters,
+if set, then notify the mtk defined info messages.
+*/
+enum media_recorder_info_flag {
+    RECORDING_SIZE_FLAG        = 1,
+    START_TIMER_FLAG           = 1 << 5,
+    CAMERA_RELEASE_FLAG        = 1 << 6,
+};
+// end of add for mtk
+
 
 // ----------------------------------------------------------------------------
 // ref-counted object for callbacks

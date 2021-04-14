@@ -25,6 +25,7 @@
 #include <AudioOutputDescriptor.h>
 #include <AudioPolicyMix.h>
 #include <SoundTriggerSession.h>
+#include "custom_extensions/AudioPolicyVendorControl.h" // MTK_AUDIO
 
 namespace android {
 
@@ -51,6 +52,9 @@ public:
     virtual const DeviceVector getAvailableInputDevices() const = 0;
 
     virtual const sp<DeviceDescriptor> &getDefaultOutputDevice() const = 0;
+
+    // MTK_AUDIO
+    virtual AudioPolicyVendorControl &getAudioPolicyVendorControl() = 0;
 
 protected:
     virtual ~AudioPolicyManagerObserver() {}

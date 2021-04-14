@@ -16,6 +16,9 @@
 
 #define LOG_TAG "APM::EffectDescriptor"
 //#define LOG_NDEBUG 0
+#if defined(MTK_AUDIO_DEBUG) && defined(CONFIG_MT_ENG_BUILD)
+#define LOG_NDEBUG 0
+#endif
 
 #include "EffectDescriptor.h"
 #include <utils/String8.h>

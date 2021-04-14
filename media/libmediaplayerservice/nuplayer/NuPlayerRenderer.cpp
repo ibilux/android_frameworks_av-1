@@ -33,6 +33,7 @@
 #include <media/stagefright/Utils.h>
 #include <media/stagefright/VideoFrameScheduler.h>
 #include <media/MediaCodecBuffer.h>
+#include <utils/SystemClock.h>
 
 #include <inttypes.h>
 
@@ -156,6 +157,9 @@ NuPlayer::Renderer::Renderer(
     CHECK(mediaClock != NULL);
     mPlaybackRate = mPlaybackSettings.mSpeed;
     mMediaClock->setPlaybackRate(mPlaybackRate);
+    (void)mSyncFlag.test_and_set();
+    mPadding = 0;         //mtk add for start & seek not smooth
+    mLastFrameAt = 0;     //mtk add for start & seek not smooth
 }
 
 NuPlayer::Renderer::~Renderer() {
@@ -326,9 +330,28 @@ void NuPlayer::Renderer::flush(bool audio, bool notifyComplete) {
         mSyncQueues = false;
     }
 
+    // Wait until the current job in the message queue is done, to make sure
+    // buffer processing from the old generation is finished. After the current
+    // job is finished, access to buffers are protected by generation.
+    Mutex::Autolock syncLock(mSyncLock);
+    int64_t syncCount = mSyncCount;
+    mSyncFlag.clear();
+
+    // Make sure message queue is not empty after mSyncFlag is cleared.
     sp<AMessage> msg = new AMessage(kWhatFlush, this);
     msg->setInt32("audio", static_cast<int32_t>(audio));
     msg->post();
+
+    int64_t uptimeMs = uptimeMillis();
+    while (mSyncCount == syncCount) {
+        (void)mSyncCondition.waitRelative(mSyncLock, ms2ns(1000));
+        if (uptimeMillis() - uptimeMs > 1000) {
+            ALOGW("flush(): no wake-up from sync point for 1s; stop waiting to "
+                  "prevent being stuck indefinitely.");
+            break;
+        }
+    }
+
 }
 
 void NuPlayer::Renderer::signalTimeDiscontinuity() {
@@ -781,6 +804,11 @@ void NuPlayer::Renderer::onMessageReceived(const sp<AMessage> &msg) {
             TRESPASS();
             break;
     }
+    if (!mSyncFlag.test_and_set()) {
+        Mutex::Autolock syncLock(mSyncLock);
+        ++mSyncCount;
+        mSyncCondition.broadcast();
+    }
 }
 
 void NuPlayer::Renderer::postDrainAudioQueue_l(int64_t delayUs) {
@@ -1125,6 +1153,13 @@ bool NuPlayer::Renderer::onDrainAudioQueue() {
         }
 
         if (written != (ssize_t)copy) {
+            // @ M add for music NE +
+            // audiosink maybe already close because of unexpected decoder error
+            // NE flow:NuplayerDecoder notify err -> Nuplayerrender notify playback complete
+            // ->MediaplayerService setnextoutput->mAudioSink clear mTrack
+            // -> mAudioSink framesize() return err
+            if (mAudioSink->ready())
+            // @M add for music NE -
             // A short count was received from AudioSink::write()
             //
             // AudioSink write is called in non-blocking mode.
@@ -1219,12 +1254,36 @@ void NuPlayer::Renderer::onNewAudioMediaTime(int64_t mediaTimeUs) {
         AudioTimestamp ts;
         if (mAudioSink->getTimestamp(ts) == OK && ts.mPosition > 0) {
             mNextAudioClockUpdateTimeUs = 0; // start our clock updates
+            //mtk add for start & seek not smooth (1)
+            if (mHasVideo) {
+                // This is for start & seek not smooth issue.
+                // because before audioTrack start and can play pending audio data,video will play normally
+                //,so when audio data can be palyed,this one video frame will be early seriously,we will
+                //calculate the mPadding and add it to mediaclock->mAnchorMediaTimeUs
+                // count the mPadding value :FramePlayedAt - lastFramePlayedAt - mPosition/SampleRate
+                mPadding = (ts.mTime.tv_sec * 1000000LL + ts.mTime.tv_nsec / 1000)
+                  - mLastFrameAt - (int64_t)((int32_t)ts.mPosition  * 1000000LL / mCurrentPcmInfo.mSampleRate);
+                if (mPadding > 250 * 1000) {
+                    mPadding = 200 * 1000LL;
+                }
+            }
+        }
+        if (mHasVideo) {
+            // record last  framePlayedAt until ts.mPostion is not zero
+            mLastFrameAt = ts.mTime.tv_sec * 1000000LL + ts.mTime.tv_nsec / 1000;
         }
     }
     int64_t nowUs = ALooper::GetNowUs();
     if (mNextAudioClockUpdateTimeUs >= 0) {
         if (nowUs >= mNextAudioClockUpdateTimeUs) {
-            int64_t nowMediaUs = mediaTimeUs - getPendingAudioPlayoutDurationUs(nowUs);
+        //mtk add for start & seek not smooth (2)
+            int64_t nowMediaUs = 0;
+            if (mHasVideo) {
+                nowMediaUs = mPadding + mediaTimeUs - getPendingAudioPlayoutDurationUs(nowUs);
+            } else {
+                nowMediaUs = mediaTimeUs - getPendingAudioPlayoutDurationUs(nowUs);
+            }
+
             mMediaClock->updateAnchor(nowMediaUs, nowUs, mediaTimeUs);
             mUseVirtualAudioSink = false;
             mNextAudioClockUpdateTimeUs = nowUs + kMinimumAudioClockUpdatePeriodUs;
@@ -1356,7 +1415,7 @@ void NuPlayer::Renderer::onDrainVideoQueue() {
 
     if (!mPaused) {
         setVideoLateByUs(nowUs - realTimeUs);
-        tooLate = (mVideoLateByUs > 40000);
+        tooLate = (mVideoLateByUs > 250000);
 
         if (tooLate) {
             ALOGV("video late by %lld us (%.2f secs)",
@@ -1391,7 +1450,36 @@ void NuPlayer::Renderer::onDrainVideoQueue() {
         tooLate = false;
     }
 
+//   set AvSyncRefTime to video codec +
+    int64_t currentPositionUs;
+    if (getCurrentPosition(&currentPositionUs)!= OK) {
+        currentPositionUs = 0;
+    }
+    entry->mNotifyConsumed->setInt64("AvSyncRefTimeUs", currentPositionUs);
+//   set AvSyncRefTime to video codec -
     entry->mNotifyConsumed->setInt64("timestampNs", realTimeUs * 1000LL);
+
+     /**************************************/
+    //mtk add drop one frame, show one frame
+    CHECK(entry->mBuffer->meta()->findInt64("timeUs", &mediaTimeUs));
+    static int32_t SinceLastDropped = 0;
+    if(tooLate)
+    {
+        if (SinceLastDropped > 0)
+        {
+            //drop
+            ALOGE("we're late dropping one timeUs %lld ms after %d frames",mediaTimeUs/1000ll,SinceLastDropped);
+            SinceLastDropped = 0;
+        }else{
+            //not drop
+            tooLate = false;
+            SinceLastDropped ++;
+        }
+    }else{
+        SinceLastDropped ++;
+    }
+    /**************************************/
+
     entry->mNotifyConsumed->setInt32("render", !tooLate);
     entry->mNotifyConsumed->post();
     mVideoQueue.erase(mVideoQueue.begin());

@@ -56,9 +56,15 @@ status_t EngineBase::setPhoneState(audio_mode_t state)
     if (!is_state_in_call(oldState) && is_state_in_call(state)) {
         ALOGV("  Entering call in setPhoneState()");
         switchVolumeCurve(AUDIO_STREAM_VOICE_CALL, AUDIO_STREAM_DTMF);
+        // MTK_AUDIO
+        AudioPolicyVendorControl &mAudioPolicyVendorControl = getApmObserver()->getAudioPolicyVendorControl();
+        mAudioPolicyVendorControl.setVoiceReplaceDTMFStatus(true);
     } else if (is_state_in_call(oldState) && !is_state_in_call(state)) {
         ALOGV("  Exiting call in setPhoneState()");
         restoreOriginVolumeCurve(AUDIO_STREAM_DTMF);
+        // MTK_AUDIO
+        AudioPolicyVendorControl &mAudioPolicyVendorControl = getApmObserver()->getAudioPolicyVendorControl();
+        mAudioPolicyVendorControl.setVoiceReplaceDTMFStatus(false);
     }
     return NO_ERROR;
 }
@@ -192,6 +198,7 @@ StreamTypeVector EngineBase::getStreamTypesForProductStrategy(product_strategy_t
 
 AttributesVector EngineBase::getAllAttributesForProductStrategy(product_strategy_t ps) const
 {
+    ALOGV("getAllAttributesForProductStrategy,  ps %d, name %s ", ps,  mProductStrategies.at(ps)->getName().c_str());
     return (mProductStrategies.find(ps) != end(mProductStrategies)) ?
                 mProductStrategies.at(ps)->getAudioAttributes() : AttributesVector();
 }

@@ -76,6 +76,7 @@ cc_library_shared {
         "libnblog",
         "libprocessgroup",
         "libutils",
+        "libmtkaudio_utils",
         "libvibrator",
     ],
     export_shared_lib_headers: ["libbinder"],
@@ -102,6 +103,9 @@ cc_library_shared {
             "signed-integer-overflow",
         ],
     },
+    defaults: [
+        "mtk_libaudioclient_defaults",
+    ],
 }
 
 // AIDL interface between libaudioclient and framework.jar
@@ -111,3 +115,51 @@ filegroup {
         "aidl/android/media/IPlayer.aidl",
     ],
 }
+
+bootstrap_go_package {
+    name:"soong-libaudioclient-mediatek",
+    pkgPath:"android/soong/libaudioclient/mediatek",
+    deps:[
+        "soong-android",
+        "soong-cc",
+    ],
+    srcs:[
+        "libaudioclient.go",
+    ],
+    pluginFor:["soong_build"],
+}
+
+// <MTK_AUDIO
+mtk_libaudioclient_defaults {
+    name: "mtk_libaudioclient_defaults",
+    shared_libs: [
+        "libmedia_helper",
+    ],
+    product_variables: {
+        debuggable: {
+            cflags: [
+                "-DCONFIG_MT_USERDEBUG_BUILD",
+                "-DMTK_LATENCY_DETECT_PULSE",
+            ],
+        },
+        eng: {
+            cflags: [
+                "-UCONFIG_MT_USERDEBUG_BUILD",
+                "-DCONFIG_MT_ENG_BUILD",
+                "-DMTK_LATENCY_DETECT_PULSE",
+            ],
+        },
+    },
+    cflags: [
+        "-DSYS_IMPL",
+    ],
+    include_dirs: [
+        "vendor/mediatek/proprietary/external/audio_utils/common_headers/audiopolicy_parameters",
+        "vendor/mediatek/proprietary/external/audio_utils/common_utils/AudioDetectPulse/",
+        "external/libxml2/include",
+        "external/icu/libandroidicu/include",
+        "vendor/mediatek/proprietary/external/AudioParamParser",
+        "vendor/mediatek/proprietary/external/AudioParamParser/include",
+    ],
+}
+// MTK_AUDIO>

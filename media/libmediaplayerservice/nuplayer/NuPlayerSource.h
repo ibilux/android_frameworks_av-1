@@ -142,6 +142,10 @@ struct NuPlayer::Source : public AHandler {
         return INVALID_OPERATION;
     }
 
+//mtkadd+
+    virtual void setGetMp3Param(int32_t *  /*flag*/, bool  /*set*/){};
+//mtkadd-
+
 protected:
     virtual ~Source() {}
 

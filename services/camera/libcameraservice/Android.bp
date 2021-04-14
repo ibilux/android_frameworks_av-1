@@ -67,6 +67,11 @@ cc_library_shared {
         "utils/ExifUtils.cpp",
         "utils/TagMonitor.cpp",
         "utils/LatencyHistogram.cpp",
+        //!++
+        "mediatek/api1/CameraClient.cpp",
+        "mediatek/CameraService.cpp",
+        "mediatek/common/CameraProviderManager.cpp",
+        //!--
     ],
 
     shared_libs: [
@@ -107,6 +112,7 @@ cc_library_shared {
         "android.hardware.camera.device@3.3",
         "android.hardware.camera.device@3.4",
         "android.hardware.camera.device@3.5",
+        "vendor.mediatek.hardware.camera.device@1.1",
     ],
 
     export_shared_lib_headers: [
@@ -114,6 +120,7 @@ cc_library_shared {
         "libcamera_client",
         "libfmq",
         "libsensorprivacy",
+        "vendor.mediatek.hardware.camera.device@1.1",
     ],
 
     include_dirs: [
@@ -131,7 +138,21 @@ cc_library_shared {
         "-Wextra",
         "-Werror",
         "-Wno-ignored-qualifiers",
+        //!++
+        "-DMTKCAM_TARGET_BUILD_USER=1",
+        //!--
     ],
+
+    //!++ For MTK debug use
+    product_variables: {
+         debuggable: {
+             cflags: [
+                   "-UMTKCAM_TARGET_BUILD_USER",
+                   "-DMTKCAM_TARGET_BUILD_USER=0",
+             ],
+          },
+    },
+   //!--
 
 }
 

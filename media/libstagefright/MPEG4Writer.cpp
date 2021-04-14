@@ -47,6 +47,7 @@
 #include <media/stagefright/Utils.h>
 #include <media/mediarecorder.h>
 #include <cutils/properties.h>
+#include <MetaDataBase_MTK.h>
 
 #include "include/ESDS.h"
 #include "include/HevcUtils.h"
@@ -104,6 +105,8 @@ static const uint8_t kHevcNalUnitTypes[5] = {
 /* uncomment to include build in meta */
 //#define SHOW_MODEL_BUILD 1
 
+
+
 class MPEG4Writer::Track {
 public:
     Track(MPEG4Writer *owner, const sp<MediaSource> &source, size_t trackId);
@@ -125,6 +128,7 @@ public:
     bool isHevc() const { return mIsHevc; }
     bool isHeic() const { return mIsHeic; }
     bool isAudio() const { return mIsAudio; }
+    bool isVideo() const { return mIsVideo; }
     bool isMPEG4() const { return mIsMPEG4; }
     bool usePrefix() const { return mIsAvc || mIsHevc || mIsHeic; }
     bool isExifData(MediaBufferBase *buffer, uint32_t *tiffHdrOffset) const;
@@ -452,6 +456,11 @@ private:
 
     Track(const Track &);
     Track &operator=(const Track &);
+// add for mtk
+private:
+    int32_t     mMediaInfoFlag;  // add for mtk defined infos in mediarecorder.h.
+    int32_t     mSlowMotionSpeedTag;
+// ~add for mtk
 };
 
 MPEG4Writer::MPEG4Writer(int fd) {
@@ -530,6 +539,7 @@ void MPEG4Writer::initInternal(int fd, bool isFirstSession) {
         ALOGE("cannot seek mFd: %s (%d) %lld", strerror(errno), errno, (long long)mFd);
         release();
     }
+    init(); // add for mtk
     for (List<Track *>::iterator it = mTracks.begin();
          it != mTracks.end(); ++it) {
         (*it)->resetInternal();
@@ -628,6 +638,12 @@ status_t MPEG4Writer::addSource(const sp<MediaSource> &source) {
 
     mHasMoovBox |= !track->isHeic();
     mHasFileLevelMeta |= track->isHeic();
+
+    if (track->isAudio()) {
+        mHasAudioTrack = true;
+    } else if (track->isVideo()) {
+        mHasVideoTrack = true;
+    }
 
     return OK;
 }
@@ -788,6 +804,7 @@ int64_t MPEG4Writer::estimateMoovBoxSize(int32_t bitRate) {
 }
 
 status_t MPEG4Writer::start(MetaData *param) {
+    ALOGD("start+ param=%s", param!=nullptr ? param->toString().c_str() : "NULL");
     if (mInitCheck != OK) {
         return UNKNOWN_ERROR;
     }
@@ -847,7 +864,7 @@ status_t MPEG4Writer::start(MetaData *param) {
         }
         return OK;
     }
-
+    initStart(param); // add for mtk
     if (!param ||
         !param->findInt32(kKeyTimeScale, &mTimeScale)) {
         mTimeScale = 1000;
@@ -953,6 +970,7 @@ status_t MPEG4Writer::start(MetaData *param) {
     }
 
     mStarted = true;
+    ALOGD("start-");
     return OK;
 }
 
@@ -1073,6 +1091,7 @@ status_t MPEG4Writer::switchFd() {
 }
 
 status_t MPEG4Writer::reset(bool stopSource) {
+    ALOGD("reset+ stopSource=%s", stopSource?"true":"false");
     if (mInitCheck != OK) {
         return OK;
     } else {
@@ -1178,6 +1197,7 @@ status_t MPEG4Writer::reset(bool stopSource) {
     CHECK(mBoxes.empty());
 
     release();
+    ALOGD("reset-");
     return err;
 }
 
@@ -1402,6 +1422,10 @@ static void StripStartcode(MediaBuffer *buffer) {
     if (!memcmp(ptr, "\x00\x00\x00\x01", 4)) {
         buffer->set_range(
                 buffer->range_offset() + 4, buffer->range_length() - 4);
+    }
+    else if (!memcmp(ptr, "\x00\x00\x01", 3)) {
+        buffer->set_range(
+                buffer->range_offset() + 3, buffer->range_length() - 3);
     }
 }
 
@@ -1684,7 +1708,7 @@ bool MPEG4Writer::exceedsFileSizeLimit() {
          it != mTracks.end(); ++it) {
         nTotalBytesEstimate += (*it)->getEstimatedTrackSizeBytes();
     }
-
+    notifyEstimateSize(nTotalBytesEstimate); // add for mtk
     if (!mStreamableFile) {
         // Add 1024 bytes as error tolerance
         return nTotalBytesEstimate + 1024 >= mMaxFileSizeLimitBytes;
@@ -1855,6 +1879,8 @@ MPEG4Writer::Track::Track(
             mIsPrimary = false;
         }
     }
+    mMediaInfoFlag = 0;  // add for mtk defined infos in mediarecorder.h.
+    mSlowMotionSpeedTag = 1;
 }
 
 // Clear all the internal states except the CSD data.
@@ -1901,6 +1927,7 @@ void MPEG4Writer::Track::resetInternal() {
         mElstTableEntries = new ListTableEntries<uint32_t, 3>(3);
     }
     mReachedEOS = false;
+    mMediaInfoFlag = 0;  // add for mtk defined infos in mediarecorder.h.
 }
 
 void MPEG4Writer::Track::updateTrackSizeEstimate() {
@@ -2179,6 +2206,7 @@ void MPEG4Writer::onMessageReceived(const sp<AMessage> &msg) {
     switch (msg->what()) {
         case kWhatSwitch:
         {
+            ALOGD("switch next fd");
             mLock.lock();
             int fd = mNextFd;
             mNextFd = -1;
@@ -2444,6 +2472,7 @@ status_t MPEG4Writer::startWriterThread() {
 
 
 status_t MPEG4Writer::Track::start(MetaData *params) {
+    ALOGD("%s Track start+", getTrackType());
     if (!mDone && mPaused) {
         mPaused = false;
         mResumed = true;
@@ -2461,6 +2490,20 @@ status_t MPEG4Writer::Track::start(MetaData *params) {
             params->findInt32(kKeyRotation, &rotationDegrees)) {
         mRotation = rotationDegrees;
     }
+    // add for mtk, add for mtk defined infos in mediarecorder.h.
+    int32_t mediainfoflag = 0;
+    if (params && params->findInt32(kKeyMediaInfoFlag, &mediainfoflag)) {
+        mMediaInfoFlag = mediainfoflag;
+    }
+
+    if (property_get_bool("ro.vendor.mtk_slow_motion_support", true)) {
+        int32_t SlowMotionTag = 1;
+        if (!mIsAudio && params && params->findInt32(kKeySlowMotionTag, &SlowMotionTag)) {
+            ALOGD("get slowmotion record speed %d", SlowMotionTag);
+            mSlowMotionSpeedTag = SlowMotionTag;
+        }
+    }
+    // end of add for mtk
 
     initTrackingProgressStatus(params);
 
@@ -2506,7 +2549,7 @@ status_t MPEG4Writer::Track::start(MetaData *params) {
 
     pthread_create(&mThread, &attr, ThreadWrapper, this);
     pthread_attr_destroy(&attr);
-
+    ALOGD("Track start-");
     return OK;
 }
 
@@ -2526,10 +2569,37 @@ status_t MPEG4Writer::Track::stop(bool stopSource) {
         return OK;
     }
 
+    // add for mtk, for EIS
+    if (mOwner->mHasAudioTrack && mIsVideo) {
+        int64_t audioTrackDurationUs = mOwner->getAudioTrackDurationUs();
+        int64_t videoTrackDurationUs = mOwner->getVideoTrackDurationUs();
+        ALOGD("EIS Audio durationUs(%lld), Video durationUs(%lld)",
+            (long long)audioTrackDurationUs, (long long)videoTrackDurationUs);
+        if (audioTrackDurationUs > videoTrackDurationUs) {
+            int64_t sleepTimeUs = audioTrackDurationUs - videoTrackDurationUs;
+            mOwner->setEISStop();
+            usleep(sleepTimeUs);
+            ALOGD("sleep %lldus done!", (long long)sleepTimeUs);
+        }
+    }
+    // end of add for mtk
+
     if (stopSource) {
         ALOGD("%s track source stopping", getTrackType());
+        // add for mtk, for EIS
+        if (mOwner->numTracks() > 1 && mIsVideo) {
+            int64_t stopTimeOffset = property_get_int64("mediarecord.eis.stoptimeoffset", 80000LL);
+            mSource->setStopTimeUs(systemTime() / 1000 - stopTimeOffset);
+        }
+        // end of add for mtk
         mSource->stop();
         ALOGD("%s track source stopped", getTrackType());
+        // add for mtk defined infos in mediarecorder.h.
+        if (mIsVideo && (mMediaInfoFlag & CAMERA_RELEASE_FLAG)) {
+            ALOGD("Notify camera release");
+            mOwner->notify(MEDIA_RECORDER_EVENT_INFO, MEDIA_RECORDER_INFO_CAMERA_RELEASE, 0);
+        }
+        // end of add for mtk
     }
 
     // Set mDone to be true after sucessfully stop mSource as mSource may be still outputting
@@ -2976,6 +3046,33 @@ status_t MPEG4Writer::Track::threadEntry() {
             continue;
         }
 
+        // add for mtk for EIS
+        if (mOwner->getEISStop()) {
+            if (mIsAudio) {
+                buffer->release();
+                buffer = NULL;
+                continue;
+            } else if (mIsVideo){
+                int64_t audioTrackDurationUs = mOwner->getAudioTrackDurationUs();
+                int64_t videoTrackDurationUs = mOwner->getVideoTrackDurationUs();
+                if (videoTrackDurationUs > audioTrackDurationUs) {
+                    buffer->release();
+                    buffer = NULL;
+                    continue;
+                }
+            }
+        }
+
+        if (mOwner->mHasVideoTrack && mIsAudio) {
+          int64_t audioTrackDurationUs = mOwner->getAudioTrackDurationUs();
+          int64_t videoTrackDurationUs = mOwner->getVideoTrackDurationUs();
+          if (audioTrackDurationUs > videoTrackDurationUs + mOwner->getEISStopWaitTime()) {
+            int64_t diffDurationUs = audioTrackDurationUs - videoTrackDurationUs
+                - mOwner->getEISStopWaitTime();
+            usleep(diffDurationUs);
+          }
+        }
+        // end of add for mtk
         // If the codec specific data has not been received yet, delay pause.
         // After the codec specific data is received, discard what we received
         // when the track is to be paused.
@@ -3134,6 +3231,15 @@ status_t MPEG4Writer::Track::threadEntry() {
                 mOwner->setStartTimestampUs(timestampUs);
                 mStartTimestampUs = timestampUs;
                 previousPausedDurationUs = mStartTimestampUs;
+                // add for mtk defined infos in mediarecorder.h.
+                ALOGD("%s mStartTimestampUs=%" PRId64 "us", trackName, mStartTimestampUs);
+                if (mIsVideo) {
+                    if (mMediaInfoFlag & START_TIMER_FLAG) {
+                        ALOGD("notify start timer");
+                        mOwner->notify(MEDIA_RECORDER_EVENT_INFO, MEDIA_RECORDER_INFO_START_TIMER, 0);
+                    }
+                }
+                // end of add for mtk
             }
 
             if (mResumed) {
@@ -3158,6 +3264,11 @@ status_t MPEG4Writer::Track::threadEntry() {
             }
             TimestampDebugHelperEntry timestampDebugEntry;
             timestampUs -= previousPausedDurationUs;
+            if (property_get_bool("ro.vendor.mtk_slow_motion_support", true)) {
+                if (mSlowMotionSpeedTag > 1) {
+                    timestampUs *= mSlowMotionSpeedTag;
+                }
+            }
             timestampDebugEntry.pts = timestampUs;
             if (WARN_UNLESS(timestampUs >= 0LL, "for %s track", trackName)) {
                 copy->release();
@@ -3175,6 +3286,12 @@ status_t MPEG4Writer::Track::threadEntry() {
                 int64_t decodingTimeUs;
                 CHECK(meta_data->findInt64(kKeyDecodingTime, &decodingTimeUs));
                 decodingTimeUs -= previousPausedDurationUs;
+
+                if (property_get_bool("ro.vendor.mtk_slow_motion_support", true)) {
+                    if (mSlowMotionSpeedTag > 1) {
+                        decodingTimeUs *= mSlowMotionSpeedTag;
+                    }
+                }
 
                 // ensure non-negative, monotonic decoding time
                 if (mLastDecodingTimeUs < 0) {
@@ -3267,6 +3384,13 @@ status_t MPEG4Writer::Track::threadEntry() {
                     trackName, timestampUs, previousPausedDurationUs);
             if (timestampUs > mTrackDurationUs) {
                 mTrackDurationUs = timestampUs;
+                // add for mtk, for EIS
+                if (mIsAudio) {
+                    mOwner->setAudioTrackDurationUs(getDurationUs());
+                } else if (mIsVideo) {
+                    mOwner->setVideoTrackDurationUs(getDurationUs());
+                }
+                // end of add for mtk
             }
 
             // We need to use the time scale based ticks, rather than the
@@ -3921,6 +4045,7 @@ void MPEG4Writer::Track::writeMp4aEsdsBox() {
 
     mOwner->beginBox("esds");
 
+
     mOwner->writeInt32(0);     // version=0, flags=0
     mOwner->writeInt8(0x03);   // ES_DescrTag
     mOwner->write(sizeESDBuffer, sizeESD);
@@ -3969,6 +4094,7 @@ void MPEG4Writer::Track::writeMp4vEsdsBox() {
     generateEsdsSize(mCodecSpecificDataSize, &sizeDSI, sizeDSIBuffer);
     generateEsdsSize(mCodecSpecificDataSize + sizeDSI + 14, &sizeDCD, sizeDCDBuffer);
     generateEsdsSize(mCodecSpecificDataSize + sizeDSI + sizeDCD + 21, &sizeESD, sizeESDBuffer);
+
 
     mOwner->beginBox("esds");
 

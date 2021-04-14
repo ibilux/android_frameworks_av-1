@@ -36,6 +36,7 @@
 #include <media/stagefright/Utils.h>
 #include <private/media/VideoFrame.h>
 #include <utils/Log.h>
+#include <cutils/properties.h>
 
 namespace android {
 
@@ -196,6 +197,14 @@ FrameDecoder::~FrameDecoder() {
 
 status_t FrameDecoder::init(
         int64_t frameTimeUs, size_t numFrames, int option, int colorFormat) {
+// HEIF ++
+    const char *mime;
+    CHECK(mTrackMeta->findCString(kKeyMIMEType, &mime));
+
+    if (!strcasecmp(mime, MEDIA_MIMETYPE_IMAGE_ANDROID_HEIC)) {
+        return init_ext(frameTimeUs, numFrames, option, colorFormat);
+    }
+// HEIF --
     if (!getDstColorFormat(
             (android_pixel_format_t)colorFormat, &mDstFormat, &mDstBpp)) {
         return ERROR_UNSUPPORTED;
@@ -217,9 +226,20 @@ status_t FrameDecoder::init(
         ALOGW("Failed to instantiate decoder [%s]", mComponentName.c_str());
         return (decoder.get() == NULL) ? NO_MEMORY : err;
     }
-
-    err = decoder->configure(
+    if (property_get_bool("vendor.mtk_thumbnail_optimization", true)) {
+        int SeekMode = static_cast<MediaSource::ReadOptions::SeekMode>(option);
+        bool isSeekingClosest = (SeekMode == MediaSource::ReadOptions::SEEK_CLOSEST)
+                || (SeekMode == MediaSource::ReadOptions::SEEK_FRAME_INDEX);
+        if (!isSeekingClosest)
+            err = decoder->configure(videoFormat, NULL /* surface */, NULL /* crypto */,
+                    MediaCodec::CONFIGURE_FLAG_ENABLE_THUMBNAIL_OPTIMIZATION /* flags */);
+        else
+            err = decoder->configure(
+                    videoFormat, NULL /* surface */, NULL /* crypto */, 0 /* flags */);
+    } else {
+        err = decoder->configure(
             videoFormat, NULL /* surface */, NULL /* crypto */, 0 /* flags */);
+    }
     if (err != OK) {
         ALOGW("configure returned error %d (%s)", err, asString(err));
         decoder->release();
@@ -247,7 +267,14 @@ status_t FrameDecoder::init(
 sp<IMemory> FrameDecoder::extractFrame(FrameRect *rect) {
     status_t err = onExtractRect(rect);
     if (err == OK) {
-        err = extractInternal();
+        const char *mime;
+        CHECK(mTrackMeta->findCString(kKeyMIMEType, &mime));
+
+        if (!strcasecmp(mime, MEDIA_MIMETYPE_IMAGE_ANDROID_HEIC)) {
+            err = extractInternal_ext();
+        } else {
+            err = extractInternal();
+        }
     }
     if (err != OK) {
         return NULL;
@@ -300,6 +327,13 @@ status_t FrameDecoder::extractInternal() {
 
             err = mSource->read(&mediaBuffer, &mReadOptions);
             mReadOptions.clearSeekTo();
+
+            if (err == OK && mediaBuffer->size() == 0 && mFirstSample) {
+               mHaveMoreInputs = false;
+               err = -1;
+               ALOGW("frame size is 0, return");
+            }
+
             if (err != OK) {
                 mHaveMoreInputs = false;
                 if (!mFirstSample && err == ERROR_END_OF_STREAM) {
@@ -370,6 +404,14 @@ status_t FrameDecoder::extractInternal() {
                     ALOGV("Timed-out waiting for output.. retries left = %zu", retriesLeft);
                     err = OK;
                 } else if (err == OK) {
+                    //  getOutpuFormat fail, check mOutputFormat == NULL first
+                    if (mOutputFormat == NULL) {
+                        ALOGE("get outputFormat fail");
+                        mSource->stop();
+                        mDecoder->release();
+                        mDecoder.clear();
+                        return -1;
+                    }
                     // If we're seeking with CLOSEST option and obtained a valid targetTimeUs
                     // from the extractor, decode to the specified frame. Otherwise we're done.
                     ALOGV("Received an output buffer, timeUs=%lld", (long long)ptsUs);
@@ -409,6 +451,7 @@ VideoFrameDecoder::VideoFrameDecoder(
       mTargetTimeUs(-1LL),
       mNumFrames(0),
       mNumFramesDecoded(0) {
+      mHaveAvcOrHevcIDR = false;
 }
 
 sp<AMessage> VideoFrameDecoder::onGetFormatAndSeekOptions(
@@ -474,11 +517,22 @@ status_t VideoFrameDecoder::onInputReceived(
         ALOGV("Seeking closest: targetTimeUs=%lld", (long long)mTargetTimeUs);
     }
 
-    if (mIsAvcOrHevc && !isSeekingClosest
-            && IsIDR(codecBuffer->data(), codecBuffer->size())) {
-        // Only need to decode one IDR frame, unless we're seeking with CLOSEST
-        // option, in which case we need to actually decode to targetTimeUs.
-        *flags |= MediaCodec::BUFFER_FLAG_EOS;
+    if (property_get_bool("vendor.mtk_thumbnail_optimization", true) &&
+            !isSeekingClosest) {
+        if (mIsAvcOrHevc && (!mHaveAvcOrHevcIDR) && IsIDR(codecBuffer->data(),
+                codecBuffer->size())) {
+            mHaveAvcOrHevcIDR = true;
+        } else if (mHaveAvcOrHevcIDR) {
+            // sometimes codec need two input frame to decode one correct output.
+            *flags |= MediaCodec::BUFFER_FLAG_EOS;
+        }
+    } else {
+        if (mIsAvcOrHevc && !isSeekingClosest
+                && IsIDR(codecBuffer->data(), codecBuffer->size())) {
+            // Only need to decode one IDR frame, unless we're seeking with CLOSEST
+            // option, in which case we need to actually decode to targetTimeUs.
+            *flags |= MediaCodec::BUFFER_FLAG_EOS;
+        }
     }
     return OK;
 }
@@ -527,6 +581,13 @@ status_t VideoFrameDecoder::onOutputReceived(
             dstBpp());
     addFrame(frameMem);
     VideoFrame* frame = static_cast<VideoFrame*>(frameMem->pointer());
+
+    //  for some special case, video file size is different from bitstream size.
+    //  check these two size before converter
+    if (width*height*3/2 > int32_t(videoFrameBuffer->size())) {
+        ALOGW("buffer size is abnormal");
+        return ERROR_UNSUPPORTED;
+    }
 
     ColorConverter converter((OMX_COLOR_FORMATTYPE)srcFormat, dstFormat());
 

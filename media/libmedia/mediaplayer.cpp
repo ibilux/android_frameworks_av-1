@@ -920,7 +920,8 @@ void MediaPlayer::notify(int msg, int ext1, int ext2, const Parcel *obj)
         break;
     case MEDIA_SEEK_COMPLETE:
         ALOGV("Received seek complete");
-        if (mSeekPosition != mCurrentPosition || (mSeekMode != mCurrentSeekMode)) {
+        if ((mSeekPosition != mCurrentPosition && abs(mCurrentPosition - mSeekPosition) >= 1000) ||
+             (mSeekMode != mCurrentSeekMode)) {
             ALOGV("Executing queued seekTo(%d, %d)", mCurrentPosition, mCurrentSeekMode);
             mSeekPosition = -1;
             mSeekMode = MediaPlayerSeekMode::SEEK_PREVIOUS_SYNC;

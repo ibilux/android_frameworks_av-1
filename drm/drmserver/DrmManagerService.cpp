@@ -31,6 +31,10 @@
 
 #include <selinux/android.h>
 
+
+#include <drm/DrmMtkUtil.h>
+
+
 using namespace android;
 
 static int selinux_enabled;
@@ -87,6 +91,8 @@ bool DrmManagerService::isProtectedCallAllowed(drm_perm_t perm) {
     // TODO
     // Following implementation is just for reference.
     // Each OEM manufacturer should implement/replace with their own solutions.
+    bool result = false;
+
     IPCThreadState* ipcState = IPCThreadState::self();
     uid_t uid = ipcState->getCallingUid();
     pid_t spid = ipcState->getCallingPid();
@@ -94,10 +100,22 @@ bool DrmManagerService::isProtectedCallAllowed(drm_perm_t perm) {
 
     for (unsigned int i = 0; i < trustedUids.size(); ++i) {
         if (trustedUids[i] == uid) {
-            return selinuxIsProtectedCallAllowed(spid, ssid, perm);
+            result = selinuxIsProtectedCallAllowed(spid, ssid, perm);
         }
     }
-    return false;
+
+    ALOGD("isProtectedCallAllowed result[%d]", result);
+
+    // M: Add for OMA DRM v1 implementation
+    // if can't authorize the process by UID, then check the process name.
+    if (!result) {
+        result = DrmMtkUtil::isTrustedClient(DrmMtkUtil::getProcessName(spid));
+    }
+
+    ALOGD("isProtectedCallAllowed2 result[%d]", result);
+
+
+    return result;
 }
 
 void DrmManagerService::instantiate() {
@@ -267,6 +285,17 @@ status_t DrmManagerService::getAllSupportInfo(
             int uniqueId, int* length, DrmSupportInfo** drmSupportInfoArray) {
     ALOGV("Entering getAllSupportInfo");
     return mDrmManager->getAllSupportInfo(uniqueId, length, drmSupportInfoArray);
+}
+
+// Add by rui to pass client's client to drmserver
+sp<DecryptHandle> DrmManagerService::openDecryptSession(
+            int uniqueId, int fd, off64_t offset, off64_t length, const char* mime, pid_t pid) {
+    ALOGD("Entering DrmManagerService::openDecryptSession 1");
+    if (isProtectedCallAllowed(OPEN_DECRYPT_SESSION)) {
+        return mDrmManager->openDecryptSession(uniqueId, fd, offset, length, mime, pid);
+    }
+
+    return NULL;
 }
 
 sp<DecryptHandle> DrmManagerService::openDecryptSession(

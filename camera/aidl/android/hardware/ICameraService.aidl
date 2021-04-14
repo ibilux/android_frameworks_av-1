@@ -165,6 +165,14 @@ interface ICameraService
     const int EVENT_USER_SWITCHED = 1; // The argument is the set of new foreground user IDs.
     oneway void notifySystemEvent(int eventId, in int[] args);
 
+//!++
+    /**
+     * Set/get property.
+     */
+    String getProperty(String key);
+    void   setProperty(String key, String value);
+//!--
+
     /**
      * Notify the camera service of a device physical status change. May only be called from
      * a privileged process.

@@ -133,10 +133,10 @@ static inline bool isAudioPlaybackRateValid(const AudioPlaybackRate &playbackRat
 // If srcSampleRate and dstSampleRate are equal, then it returns destination frames, which
 // may not be true if the resampler is asynchronous.
 static inline size_t sourceFramesNeeded(
-        uint32_t srcSampleRate, size_t dstFramesRequired, uint32_t dstSampleRate) {
+        uint32_t srcSampleRate, size_t dstFramesRequired, uint32_t dstSampleRate, float speed = 1.0) {
     // +1 for rounding - always do this even if matched ratio (resampler may use phases not ratio)
     // +1 for additional sample needed for interpolation
-    return srcSampleRate == dstSampleRate ? dstFramesRequired :
+    return (srcSampleRate == dstSampleRate && speed == 1.0) ? dstFramesRequired :
             size_t((uint64_t)dstFramesRequired * srcSampleRate / dstSampleRate + 1 + 1);
 }
 
@@ -148,14 +148,18 @@ static inline size_t destinationFramesPossible(size_t srcFrames, uint32_t srcSam
         return srcFrames;
     }
     uint64_t dstFrames = (uint64_t)srcFrames * dstSampleRate / srcSampleRate;
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+    return dstFrames;
+#else
     return dstFrames > 2 ? dstFrames - 2 : 0;
+#endif
 }
 
 static inline size_t sourceFramesNeededWithTimestretch(
         uint32_t srcSampleRate, size_t dstFramesRequired, uint32_t dstSampleRate,
         float speed) {
     // required is the number of input frames the resampler needs
-    size_t required = sourceFramesNeeded(srcSampleRate, dstFramesRequired, dstSampleRate);
+    size_t required = sourceFramesNeeded(srcSampleRate, dstFramesRequired, dstSampleRate, speed);
     // to deliver this, the time stretcher requires:
     return required * (double)speed + 1 + 1; // accounting for rounding dependencies
 }

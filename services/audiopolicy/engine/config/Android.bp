@@ -12,6 +12,7 @@ cc_library_static {
         "-Wall",
         "-Werror",
         "-Wextra",
+        "-DMTK_AUDIO",
     ],
     shared_libs: [
         "libmedia_helper",

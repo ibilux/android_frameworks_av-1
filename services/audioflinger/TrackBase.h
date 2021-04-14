@@ -215,6 +215,8 @@ protected:
 
     uint32_t channelCount() const { return mChannelCount; }
 
+    size_t frameSize() const { return mFrameSize; }
+
     audio_channel_mask_t channelMask() const { return mChannelMask; }
 
     virtual uint32_t sampleRate() const { return mSampleRate; }
@@ -313,6 +315,17 @@ protected:
     std::atomic<bool>   mServerLatencyFromTrack{}; // latency from track or server timestamp.
     std::atomic<double> mServerLatencyMs{};        // last latency pushed from server thread.
     std::atomic<FrameTime> mKernelFrameTime{};     // last frame time on kernel side.
+// <MTK_AUDIO_DEBUG
+protected:
+    unsigned int        mTrackCount;
+// MTK_AUDIO_DEBUG>
+//<MTK_AUDIO_FIX_DEFAULT_DEFECT
+public:
+    bool                       mPauseFlag;
+    bool                       mPauseFlagCanRelease;
+    Condition                  mPauseCond;
+    Mutex                      mPauseCondLock;
+//MTK_AUDIO_FIX_DEFAULT_DEFECT>
     const pid_t         mCreatorPid;  // can be different from mclient->pid() for instance
                                       // when created by NuPlayer on behalf of a client
 };

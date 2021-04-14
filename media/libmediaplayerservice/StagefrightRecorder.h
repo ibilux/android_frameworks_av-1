@@ -222,6 +222,12 @@ private:
 
     StagefrightRecorder(const StagefrightRecorder &);
     StagefrightRecorder &operator=(const StagefrightRecorder &);
+// add for mtk
+private:
+    // add for mtk defined infos in mediarecorder.h, notify infos set by ap only.
+    int32_t mMediaInfoFlag;
+    status_t setParameterEx(const String8 &key, const String8 &value);
+// end of add fot mtk
 };
 
 }  // namespace android

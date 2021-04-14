@@ -26,6 +26,7 @@
 #include <utils/RefBase.h>
 #include <utils/StrongPointer.h>
 #include <utils/Timers.h>
+#include <utils/threads.h>
 
 namespace android {
 
@@ -265,6 +266,8 @@ class MediaAnalyticsItem {
         size_t mPropCount;
         size_t mPropSize;
         Prop *mProps;
+        //mtkadd to protect mProps in mutl-thread access
+        mutable Mutex  mLock;
 };
 
 } // namespace android

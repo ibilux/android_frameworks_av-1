@@ -55,6 +55,8 @@ const sp<IDrmManagerService>& DrmManagerClientImpl::getDrmManagerService() {
         char value[PROPERTY_VALUE_MAX];
         if (property_get("drm.service.enabled", value, NULL) == 0) {
             // Drm is undefined for this device
+            ALOGE("DrmManagerClientImpl::getDrmManagerService service not defined");
+
             return sDrmManagerService;
         }
 

@@ -141,6 +141,9 @@ public:
     void log(const char* indent) const;
 
     AudioGains mGains; // gain controllers
+    // MTK_AUDIO
+    bool isSamplingRateSupport(uint32_t samplingRate);
+    bool isChannelMaskSupport(audio_channel_mask_t channelMask);
 
 private:
     void pickChannelMask(audio_channel_mask_t &channelMask, const ChannelsVector &channelMasks) const;

@@ -391,6 +391,12 @@ extern "C" int EffectRelease(effect_handle_t handle){
     }
 
     SessionContext *pSessionContext = &GlobalSessionMemory[pContext->pBundledContext->SessionNo];
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+    if(pSessionContext->pBundledContext == LVM_NULL) {
+        ALOGD("EffectRelease Session Already removed pBundledContext = NULL");
+        return 0;
+    }
+#endif
 
     // Clear the instantiated flag for the effect
     // protect agains the case where an effect is un-instantiated without being disabled
@@ -3807,6 +3813,9 @@ int Effect_command(effect_handle_t  self,
         case EFFECT_CMD_SET_VOLUME:
         {
             uint32_t leftVolume, rightVolume;
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+            uint32_t firstVolume;
+#endif
             int16_t  leftdB, rightdB;
             int16_t  maxdB, pandB;
             int32_t  vol_ret[2] = {1<<24,1<<24}; // Apply no volume
@@ -3818,12 +3827,29 @@ int Effect_command(effect_handle_t  self,
                 break;
             }
 
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+            if (pCmdData == NULL ||
+                    (cmdSize != 2 * sizeof(uint32_t) && cmdSize != 3 * sizeof(uint32_t)) ||
+                    pReplyData == NULL || replySize == NULL || *replySize < 2 * sizeof(int32_t)) {
+                ALOGV("\tLVM_ERROR : Effect_command cmdCode Case: "
+                        "EFFECT_CMD_SET_VOLUME: ERROR");
+                return -EINVAL;
+            }
+            if (cmdSize == 3 * sizeof(uint32_t)) {
+                firstVolume = ((*((uint32_t *)pCmdData + 2)));
+                if (firstVolume) {
+                    pContext->pBundledContext->firstVolume = LVM_TRUE;
+                }
+            }
+
+#else
             if (pCmdData == NULL || cmdSize != 2 * sizeof(uint32_t) || pReplyData == NULL ||
                     replySize == NULL || *replySize < 2*sizeof(int32_t)) {
                 ALOGV("\tLVM_ERROR : Effect_command cmdCode Case: "
                         "EFFECT_CMD_SET_VOLUME: ERROR");
                 return -EINVAL;
             }
+#endif
 
             leftVolume  = ((*(uint32_t *)pCmdData));
             rightVolume = ((*((uint32_t *)pCmdData + 1)));

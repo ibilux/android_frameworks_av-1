@@ -34,6 +34,12 @@
 #include <media/IAudioFlinger.h>
 #include <media/MediaAnalyticsItem.h>
 #include <media/TypeConverter.h>
+#include<media/MtkLogger.h>
+#define MTK_LOG_LEVEL_SILENCE 4 // only enable if necessary
+
+#if defined(MTK_LATENCY_DETECT_PULSE)
+#include "AudioDetectPulse.h"
+#endif // MTK_LATENCY_DETECT_PULSE
 
 #define WAIT_PERIOD_MS          10
 
@@ -68,7 +74,7 @@ status_t AudioRecord::getMinFrameCount(
                 __func__, sampleRate, format, channelMask);
         return BAD_VALUE;
     }
-
+    MTK_ALOGD("%s %zu", __FUNCTION__ , * frameCount);
     return NO_ERROR;
 }
 
@@ -163,7 +169,7 @@ AudioRecord::AudioRecord(
 AudioRecord::~AudioRecord()
 {
     mMediaMetrics.gather(this);
-
+    MTK_ALOGI("%s(%d): mStatus %d", __func__, mPortId, mStatus);
     if (mStatus == NO_ERROR) {
         // Make sure that callback function exits in the case where
         // it is looping on buffer empty condition in obtainBuffer().
@@ -188,6 +194,17 @@ AudioRecord::~AudioRecord()
                 __func__, mPortId, mSessionId);
         AudioSystem::releaseAudioSessionId(mSessionId, -1 /*pid*/);
     }
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS04677225: fix use AudioRecord after release
+    else {
+        AutoMutex lock(mLock);
+        if (mAudioRecordThread != 0) {
+            mAudioRecordThread->requestExit();
+            mAudioRecordThread->requestExitAndWait();
+            mAudioRecordThread.clear();
+        }
+        ALOGD("%s done", __func__);
+    }
+#endif
 }
 
 status_t AudioRecord::set(
@@ -210,6 +227,12 @@ status_t AudioRecord::set(
         audio_microphone_direction_t selectedMicDirection,
         float microphoneFieldDimension)
 {
+    InitializeMTKLogLevel("vendor.af.track.log");
+    MTK_ALOGI("set(): %p, inputSource %d, sampleRate %u, format %#x, channelMask %#x, frameCount %zu, "
+          "notificationFrames %u, sessionId %d, transferType %d, flags %#x, opPackageName %s "
+          "uid %d, pid %d",
+          this, inputSource, sampleRate, format, channelMask, frameCount, notificationFrames,
+          sessionId, transferType, flags, String8(mOpPackageName).string(), uid, pid);
     status_t status = NO_ERROR;
     uint32_t channelCount;
     pid_t callingPid;
@@ -331,6 +354,7 @@ status_t AudioRecord::set(
         mAudioRecordThread = new AudioRecordThread(*this);
         mAudioRecordThread->run("AudioRecord", ANDROID_PRIORITY_AUDIO);
         // thread begins in paused state, and will not reference us until start()
+        MTK_ALOGD("%s(): %p, Create AudioRecordThread, tid = %d", __func__, this, mAudioRecordThread->getTid());
     }
 
     // create the IAudioRecord
@@ -376,6 +400,7 @@ exit:
 
 status_t AudioRecord::start(AudioSystem::sync_event_t event, audio_session_t triggerSession)
 {
+    MTK_ALOGI("%s(%d): %p, sync event %d trigger session %d", __func__, mPortId, this, event, triggerSession);
     ALOGV("%s(%d): sync event %d trigger session %d", __func__, mPortId, event, triggerSession);
 
     AutoMutex lock(mLock);
@@ -438,12 +463,14 @@ status_t AudioRecord::start(AudioSystem::sync_event_t event, audio_session_t tri
         // we've successfully started, log that time
         mMediaMetrics.logStart(systemTime());
     }
+    MTK_ALOGI("%s(%d): return status %d", __func__, mPortId, status);
     return status;
 }
 
 void AudioRecord::stop()
 {
     AutoMutex lock(mLock);
+    MTK_ALOGI("%s(%d): %p, mActive:%d\n", __func__, mPortId, this, mActive);
     ALOGV("%s(%d): mActive:%d\n", __func__, mPortId, mActive);
     if (!mActive) {
         return;
@@ -467,6 +494,7 @@ void AudioRecord::stop()
 
     // we've successfully started, log that time
     mMediaMetrics.logStop(systemTime());
+    MTK_ALOGI("%s(%d) done", __func__, mPortId);
 }
 
 bool AudioRecord::stopped() const
@@ -569,6 +597,8 @@ status_t AudioRecord::getTimestamp(ExtendedTimestamp *timestamp)
             if (timestamp->mTimeNs[i] >= 0) {
                 timestamp->mPosition[i] += mFramesReadServerOffset;
             }
+            MTK_ALOGV_IF(i <= 2,"%s: i = %d, time = %" PRId64" , position = %" PRId64, __FUNCTION__, i, timestamp->mTimeNs[i],
+                  timestamp->mPosition[i]);
         }
     }
     return status;
@@ -659,6 +689,7 @@ const char * AudioRecord::convertTransferToText(transfer_type transferType) {
 // must be called with mLock held
 status_t AudioRecord::createRecord_l(const Modulo<uint32_t> &epoch, const String16& opPackageName)
 {
+    MTK_ALOGD("%s: %p", __func__, this);
     const sp<IAudioFlinger>& audioFlinger = AudioSystem::get_audio_flinger();
     IAudioFlinger::CreateRecordInput input;
     IAudioFlinger::CreateRecordOutput output;
@@ -667,6 +698,11 @@ status_t AudioRecord::createRecord_l(const Modulo<uint32_t> &epoch, const String
     void *iMemPointer;
     audio_track_cblk_t* cblk;
     status_t status;
+
+#if defined(MTK_LATENCY_DETECT_PULSE)
+    String8 ret  = AudioSystem::getParameters(String8("DetectPulseEnable"));
+    AudioDetectPulse::setDetectPulse(String8("DetectPulseEnable=1") == ret ? true : false);
+#endif // MTK_LATENCY_DETECT_PULSE
 
     if (audioFlinger == 0) {
         ALOGE("%s(%d): Could not get audioflinger", __func__, mPortId);
@@ -793,6 +829,7 @@ status_t AudioRecord::createRecord_l(const Modulo<uint32_t> &epoch, const String
     IPCThreadState::self()->flushCommands();
 
     mCblk = cblk;
+    MTK_ALOGI("openRecord_l: %p, mCblk = %p", this, mCblk);
     // note that output.frameCount is the (possibly revised) value of mReqFrameCount
     if (output.frameCount < mReqFrameCount || (mReqFrameCount == 0 && output.frameCount == 0)) {
         ALOGW("%s(%d): Requested frameCount %zu but received frameCount %zu",
@@ -958,6 +995,13 @@ void AudioRecord::releaseBuffer(const Buffer* audioBuffer)
     buffer.mFrameCount = stepCount;
     buffer.mRaw = audioBuffer->raw;
 
+#if defined(MTK_LATENCY_DETECT_PULSE)
+    if (AudioDetectPulse::getDetectPulse()) {
+        AudioDetectPulse::doDetectPulse(TAG_AUDIO_RECORD, 800, 0, (void *)buffer.mRaw,
+                                        audioBuffer->size, mFormat, mChannelCount, mSampleRate);
+     }
+#endif // MTK_LATENCY_DETECT_PULSE
+
     AutoMutex lock(mLock);
     mInOverrun = false;
     mProxy->releaseBuffer(&buffer);
@@ -1017,6 +1061,7 @@ ssize_t AudioRecord::read(void* buffer, size_t userSize, bool blocking)
         mFramesRead += read / mFrameSize;
         // mFramesReadTime = systemTime(SYSTEM_TIME_MONOTONIC); // not provided at this time.
     }
+    MTK_ALOGS(MTK_LOG_LEVEL_SILENCE, "%s(%d): %p, read = %zd, mFramesRead = %" PRId64, __func__, mPortId, this, read, mFramesRead);
     return read;
 }
 
@@ -1051,8 +1096,17 @@ nsecs_t AudioRecord::processAudioBuffer()
 
     // Check for track invalidation
     if (flags & CBLK_INVALID) {
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+       status_t status = restoreRecord_l("processAudioBuffer");
+        mLock.unlock();
+        if (status == PERMISSION_DENIED) {
+            ALOGE("Error restoreRecord_l fail for Permission denied,  giving up");
+            return NS_NEVER;
+        }
+#else
         (void) restoreRecord_l("processAudioBuffer");
         mLock.unlock();
+#endif
         // Run again immediately, but with a new IAudioRecord
         return 0;
     }
@@ -1075,7 +1129,11 @@ nsecs_t AudioRecord::processAudioBuffer()
     bool markerReached = false;
     Modulo<uint32_t> markerPosition(mMarkerPosition);
     // FIXME fails for wraparound, need 64 bits
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03140893
+    if (!mMarkerReached && (markerPosition.value() > 0) && (position >= markerPosition) && mActive) {
+#else
     if (!mMarkerReached && markerPosition.value() > 0 && position >= markerPosition) {
+#endif
         mMarkerReached = markerReached = true;
     }
 
@@ -1084,6 +1142,8 @@ nsecs_t AudioRecord::processAudioBuffer()
     Modulo<uint32_t> newPosition(mNewPosition);
     uint32_t updatePeriod = mUpdatePeriod;
     // FIXME fails for wraparound, need 64 bits
+    MTK_ALOGS(MTK_LOG_LEVEL_SILENCE,"updatePeriod %d, position %u >= newPosition %u",
+            updatePeriod, position.value(), newPosition.value());
     if (updatePeriod > 0 && position >= newPosition) {
         newPosCount = ((position - newPosition).value() / updatePeriod) + 1;
         mNewPosition += updatePeriod * newPosCount;
@@ -1113,6 +1173,7 @@ nsecs_t AudioRecord::processAudioBuffer()
     }
     while (newPosCount > 0) {
         size_t temp = newPosition.value(); // FIXME size_t != uint32_t
+        MTK_ALOGD("EVENT_NEW_POS");
         mCbf(EVENT_NEW_POS, mUserData, &temp);
         newPosition += updatePeriod;
         newPosCount--;
@@ -1150,7 +1211,20 @@ nsecs_t AudioRecord::processAudioBuffer()
     if (minFrames != (uint32_t) ~0) {
         // This "fudge factor" avoids soaking CPU, and compensates for late progress by server
         static const nsecs_t kFudgeNs = 10000000LL; // 10 ms
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03140893
+        // remove kFudgeNs for (mTransfer != TRANSFER_CALLBACK)
+        // to let position update in time
+        if (mTransfer != TRANSFER_CALLBACK) {
+             ns = ((minFrames * 1000000000LL) / mSampleRate);
+             if (ns <= kFudgeNs) {
+                 ns += kFudgeNs;
+             }
+        } else {
+             ns = ((minFrames * 1000000000LL) / mSampleRate) + kFudgeNs;
+        }
+#else
         ns = ((minFrames * 1000000000LL) / mSampleRate) + kFudgeNs;
+#endif
     }
 
     // If not supplying data by EVENT_MORE_DATA, then we're done
@@ -1270,7 +1344,7 @@ nsecs_t AudioRecord::processAudioBuffer()
 
 status_t AudioRecord::restoreRecord_l(const char *from)
 {
-    ALOGW("%s(%d): dead IAudioRecord, creating a new one from %s()", __func__, mPortId, from);
+    ALOGW("%s(%d): dead IAudioRecord %p, creating a new one from %s()", __func__, mPortId, this, from);
     ++mSequence;
 
     const int INITIAL_RETRIES = 3;

@@ -28,6 +28,7 @@ cc_library_static {
         "frameworks/av/media/libstagefright/mpeg2ts",
         "frameworks/av/media/libstagefright/rtsp",
         "frameworks/av/media/libstagefright/timedtext",
+        "vendor/mediatek/proprietary/frameworks/av/AVEnhance/libmtkavenhancements",
     ],
 
     cflags: [
@@ -57,5 +58,25 @@ cc_library_static {
     sanitize: {
         cfi: true,
     },
+// MTK_USE_ANDROID_MM_DEFAULT_CODE
+    defaults: [
+        "mtk_libstagefright_nuplayer_defaults",
+    ],
+}
 
+bootstrap_go_package {
+    name:"soong-nuplayer-mediatek",
+    pkgPath:"android/soong/nuplayer/mediatek",
+    deps:[
+        "soong-android",
+        "soong-cc",
+    ],
+    srcs:[
+        "nuplayer.go",
+    ],
+    pluginFor:["soong_build"],
+}
+
+mtk_libstagefright_nuplayer_defaults {
+    name: "mtk_libstagefright_nuplayer_defaults",
 }

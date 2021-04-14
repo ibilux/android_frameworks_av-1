@@ -50,6 +50,10 @@ sp<IMediaExtractor> MediaExtractorFactory::Create(
         return CreateFromService(source, mime);
     } else {
         // remote extractor
+        // Do DrmInitialization before creating mediaextractor from MediaExtractorService,
+        // otherwise current Calling Pid will change to Media Extractor Pid.
+        // For Data Protection scanerio we need AP's PID to pass some DRM plugin's permission check.
+        source->DrmInitialization(nullptr /* mime */);
         ALOGV("get service manager");
         sp<IBinder> binder = defaultServiceManager()->getService(String16("media.extractor"));
 

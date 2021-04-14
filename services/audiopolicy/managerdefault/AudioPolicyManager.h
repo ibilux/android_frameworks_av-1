@@ -50,6 +50,8 @@
 #include <EffectDescriptor.h>
 #include <SoundTriggerSession.h>
 #include "TypeConverter.h"
+#include "custom_extensions/AudioPolicyVendorControl.h"  // MTK_AUDIO
+#include "custom_extensions/AudioPolicyManagerCustomImpl.h"  // MTK_AUDIO
 
 namespace android {
 
@@ -81,6 +83,8 @@ namespace android {
 // Default minimum length allowed for offloading a compressed track
 // Can be overridden by the audio.offload.min.duration.secs property
 #define OFFLOAD_DEFAULT_MIN_DURATION_SECS 60
+class AudioPolicyManagerCustomInterface;
+class AudioPolicyManagerCustom;
 
 // ----------------------------------------------------------------------------
 // AudioPolicyManager implements audio policy manager behavior common to all platforms.
@@ -90,7 +94,7 @@ class AudioPolicyManager : public AudioPolicyInterface, public AudioPolicyManage
 {
 
 public:
-        explicit AudioPolicyManager(AudioPolicyClientInterface *clientInterface);
+        explicit AudioPolicyManager(AudioPolicyClientInterface *clientInterface, AudioPolicyManagerCustomInterface *customInterface);
         virtual ~AudioPolicyManager();
 
         // AudioPolicyInterface
@@ -222,6 +226,11 @@ public:
 
         status_t setAllowedCapturePolicy(uid_t uid, audio_flags_mask_t capturePolicy) override;
         virtual bool isOffloadSupported(const audio_offload_info_t& offloadInfo);
+// <MTK_AUDIO_ADD
+        // add with Sample rate Policy
+        virtual status_t startOutputSamplerate(audio_port_handle_t portId, int samplerate);
+        virtual status_t stopOutputSamplerate(audio_port_handle_t portId, int samplerate);
+// MTK_AUDIO_ADD>
 
         virtual bool isDirectOutputSupported(const audio_config_base_t& config,
                                              const audio_attributes_t& attributes);
@@ -307,6 +316,9 @@ public:
             return volumeGroup != VOLUME_GROUP_NONE ? NO_ERROR : BAD_VALUE;
         }
 
+        // MTK_AUDIO
+        virtual status_t setPolicyManagerParameters(int par1, int par2, int par3, int par4);
+        friend class AudioPolicyManagerCustomImpl;
 protected:
         // A constructor that allows more fine-grained control over initialization process,
         // used in automatic tests.
@@ -393,6 +405,11 @@ protected:
             auto *curves = mEngine->getVolumeCurvesForStreamType(stream);
             ALOG_ASSERT(curves != nullptr, "No curves for stream %s", toString(stream).c_str());
             return *curves;
+        }
+        // MTK_AUDIO
+        virtual AudioPolicyVendorControl &getAudioPolicyVendorControl()
+        {
+            return mAudioPolicyVendorControl;
         }
 
         void addOutput(audio_io_handle_t output, const sp<SwAudioOutputDescriptor>& outputDesc);
@@ -532,7 +549,7 @@ protected:
         // changed: connected device, phone state, force use, output start, output stop..
         // see getDeviceForStrategy() for the use of fromCache parameter
         DeviceVector getNewOutputDevices(const sp<SwAudioOutputDescriptor>& outputDesc,
-                                         bool fromCache);
+                                           bool fromCache, bool bShareHwModule = true); // MTK_AUDIO
 
         /**
          * @brief updateDevicesAndOutputs: updates cache of devices of the engine
@@ -572,7 +589,8 @@ protected:
          */
         virtual uint32_t checkDeviceMuteStrategies(const sp<AudioOutputDescriptor>& outputDesc,
                                                    const DeviceVector &prevDevices,
-                                                   uint32_t delayMs);
+                                                   uint32_t delayMs,
+                                                   bool mtkSkipCheckMuteForChangeDevice = false);
 
         audio_io_handle_t selectOutput(const SortedVector<audio_io_handle_t>& outputs,
                                        audio_output_flags_t flags = AUDIO_OUTPUT_FLAG_NONE,
@@ -604,6 +622,7 @@ protected:
 
         audio_io_handle_t selectOutputForMusicEffects();
 
+#if 0
         virtual status_t addAudioPatch(audio_patch_handle_t handle, const sp<AudioPatch>& patch)
         {
             return mAudioPatches.addAudioPatch(handle, patch);
@@ -612,6 +631,10 @@ protected:
         {
             return mAudioPatches.removeAudioPatch(handle);
         }
+#else   // MTK_FM_SUPPORT
+        virtual status_t addAudioPatch(audio_patch_handle_t handle, const sp<AudioPatch>& patch);
+        virtual status_t removeAudioPatch(audio_patch_handle_t handle);
+#endif
 
         bool isPrimaryModule(const sp<HwModule> &module) const
         {
@@ -759,7 +782,10 @@ protected:
         std::unordered_set<audio_format_t> mManualSurroundFormats;
 
         std::unordered_map<uid_t, audio_flags_mask_t> mAllowedCapturePolicies;
+        // MTK_AUDIO
+        AudioPolicyVendorControl mAudioPolicyVendorControl;
 private:
+        AudioPolicyManagerCustomInterface *mpAudioPolicyMTKInterface;   // MTK_AUDIO
         // Add or remove AC3 DTS encodings based on user preferences.
         void modifySurroundFormats(const sp<DeviceDescriptor>& devDesc, FormatVector *formatsPtr);
         void modifySurroundChannelMasks(ChannelsVector *channelMasksPtr);

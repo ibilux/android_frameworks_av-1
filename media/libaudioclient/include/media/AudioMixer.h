@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
 **
 ** Copyright 2007, The Android Open Source Project
 **
@@ -35,6 +40,12 @@
 #include <utils/Compat.h>
 #include <utils/threads.h>
 
+// <MTK_AUDIOMIXER_ENABLE_DRC
+#include <media/AudioUtilmtk.h>
+#include <utils/String8.h>
+#include "MtkAudioComponent.h"
+// MTK_AUDIOMIXER_ENABLE_DRC>
+
 // FIXME This is actually unity gain, which might not be max in future, expressed in U.12
 #define MAX_GAIN_INT AudioMixer::UNITY_GAIN_INT
 
@@ -69,6 +80,9 @@ public:
         RAMP_VOLUME     = 0x3002, // ramp to new volume
         VOLUME          = 0x3003, // don't ramp
         TIMESTRETCH     = 0x3004,
+// <MTK_AUDIOMIXER_ENABLE_DRC
+        DRC             = 0x3010, // dynamic range control
+// MTK_AUDIOMIXER_ENABLE_DRC>
 
         // set Parameter names
         // for target TRACK
@@ -82,6 +96,10 @@ public:
         // for haptic
         HAPTIC_ENABLED  = 0x4007, // Set haptic data from this track should be played or not.
         HAPTIC_INTENSITY = 0x4008, // Set the intensity to play haptic data.
+// <MTK_AUDIOMIXER_ENABLE_DRC
+        STREAM_TYPE     = 0x4009,
+        FLAGS           = 0x4010, // ALPS04408933 low latency support drc
+// MTK_AUDIOMIXER_ENABLE_DRC>
         // for target RESAMPLE
         SAMPLE_RATE     = 0x4100, // Configure sample rate conversion on this track name;
                                   // parameter 'value' is the new sample rate in Hz.
@@ -102,6 +120,11 @@ public:
         // for target TIMESTRETCH
         PLAYBACK_RATE   = 0x4300, // Configure timestretch on this track name;
                                   // parameter 'value' is a pointer to the new playback rate.
+// <MTK_AUDIOMIXER_ENABLE_DRC
+        DEVICE          = 0x4F00, // output device for DRC
+        UPDATE_ACFHCF   = 0x4F01, // update parameter for DRC ACF/HCF
+        UPDATE_SCENE    = 0x4F02, // update parameter for DRC custom scene
+// MTK_AUDIOMIXER_ENABLE_DRC>
     };
 
     typedef enum { // Haptic intensity, should keep consistent with VibratorService
@@ -134,7 +157,21 @@ public:
         : mSampleRate(sampleRate)
         , mFrameCount(frameCount) {
         pthread_once(&sOnceControl, &sInitRoutine);
+
+        if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+            if (mNonResampleTemp.get() == nullptr) {
+                mNonResampleTemp.reset(new int32_t[MAX_NUM_CHANNELS * mFrameCount]);
+            }
+
+            if (mDRCTempBuffer.get() == nullptr) {
+                mDRCTempBuffer.reset(new int32_t[FCC_2 * mFrameCount]);
+            }
+        } // MTK_AUDIOMIXER_ENABLE_DRC
     }
+
+// <MTK_AUDIOMIXER_ENABLE_DRC
+    /*virtual*/             ~AudioMixer();  // non-virtual saves a v-table, restore if sub-classed
+// MTK_AUDIOMIXER_ENABLE_DRC>
 
     // Create a new track in the mixer.
     //
@@ -196,6 +233,9 @@ public:
         switch (format) {
         case AUDIO_FORMAT_PCM_8_BIT:
         case AUDIO_FORMAT_PCM_16_BIT:
+// <MTK_AUDIOMIXER_ENABLE_DRC
+        case AUDIO_FORMAT_PCM_8_24_BIT:
+// MTK_AUDIOMIXER_ENABLE_DRC>
         case AUDIO_FORMAT_PCM_24_BIT_PACKED:
         case AUDIO_FORMAT_PCM_32_BIT:
         case AUDIO_FORMAT_PCM_FLOAT:
@@ -455,6 +495,37 @@ private:
         void track__Resample(TO* out, size_t frameCount, TO* temp __unused, TA* aux);
         template <int MIXTYPE, typename TO, typename TI, typename TA>
         void track__NoResample(TO* out, size_t frameCount, TO* temp __unused, TA* aux);
+// <MTK_AUDIO
+public:
+// <MTK_AUDIO_DEBUG
+        uint32_t                 mDevSampleRate;
+// MTK_AUDIO_DEBUG>
+
+// <MTK_AUDIO_FIX_DEFAULT_DEFECT
+        // ALPS03762573 : first volume control
+        bool mPreVolumeValid[MAX_NUM_VOLUMES];
+        bool mPreAuxValid;
+// MTK_AUDIO_FIX_DEFAULT_DEFECT>
+// <MTK_AUDIOMIXER_ENABLE_DRC
+        audio_stream_type_t      mStreamType;
+        audio_output_flags_t     mFlags; // ALPS04408933 low latency support drc
+        bool                     mDRCEnable;
+        MtkAudioLoudBase         *mpDRCObj;
+        int32_t                  *mDRCTempBuffer;
+        String8                  mCustomScene;
+
+        template <typename TO>
+        void        volumeClamp(size_t outFrameCount, TO** temp, bool isClamp);
+        template <int MIXTYPE>
+        bool        doPostProcessing(void *buffer, audio_format_t format, size_t frameCount);
+        void        setDRCHandler(audio_devices_t device, uint32_t sampleRate);
+        void        applyDRC(void *ioBuffer, uint32_t SampleSize, int32_t *tempBuffer,
+                        audio_format_t process_format, int process_channel);
+        void        updateDRCParam(int sampleRate);
+        void        resetDRC();
+        bool        checkDRCExist();
+// MTK_AUDIOMIXER_ENABLE_DRC>
+// MTK_AUDIO>
     };
 
     // TODO: remove BLOCKSIZE unit of processing - it isn't needed anymore.
@@ -511,6 +582,18 @@ private:
     std::map<int /* name */, std::shared_ptr<Track>> mTracks;
 
     static pthread_once_t sOnceControl; // initialized in constructor by first new
+
+// <MTK_AUDIOMIXER_ENABLE_DRC
+    std::unique_ptr<int32_t[]> mNonResampleTemp;
+    std::unique_ptr<int32_t[]> mDRCTempBuffer;
+
+public:
+    static bool mUIDRCEnable;
+    static String8 mSetCustomScene;
+
+    void setDRCEnable(bool enable) { mUIDRCEnable = enable; } // UI Dynamic Control DRC
+    void releaseDRC(int trackId);
+// MTK_AUDIOMIXER_ENABLE_DRC>
 };
 
 // ----------------------------------------------------------------------------

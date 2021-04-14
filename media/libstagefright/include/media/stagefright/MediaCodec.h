@@ -58,6 +58,7 @@ using hardware::cas::native::V1_0::IDescrambler;
 struct MediaCodec : public AHandler {
     enum ConfigureFlags {
         CONFIGURE_FLAG_ENCODE   = 1,
+        CONFIGURE_FLAG_ENABLE_THUMBNAIL_OPTIMIZATION = (0x1<<2),  //  thumbnail mode
     };
 
     enum BufferFlags {

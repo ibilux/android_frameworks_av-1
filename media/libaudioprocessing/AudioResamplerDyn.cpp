@@ -160,6 +160,7 @@ void AudioResamplerDyn<TC, TI, TO>::InBuffer::reset()
 {
     // clear resampler state
     if (mState != nullptr) {
+        ALOGD("AudioResamplerDyn reset!!");
         memset(mState, 0, mStateCount * sizeof(TI));
     }
 }

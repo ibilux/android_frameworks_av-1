@@ -16,4 +16,10 @@ cc_library_headers {
     name: "libaudiopolicyengine_interface_headers",
     host_supported: true,
     export_include_dirs: ["."],
+//<MTKAddED
+    include_dirs: [
+        "frameworks/av/services/audiopolicy/custom_extensions",
+        "frameworks/av/services/audiopolicy",
+    ],
+//MTKAddED>
 }

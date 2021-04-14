@@ -153,7 +153,11 @@ public:
     virtual DeviceVector devices() const { return mDevices; }
     bool sharesHwModuleWith(const sp<AudioOutputDescriptor>& outputDesc);
     virtual DeviceVector supportedDevices() const  { return mDevices; }
-    virtual bool isDuplicated() const { return false; }
+
+//    virtual bool isDuplicated() const { return false; }
+//<<MTK added
+    virtual bool isDuplicated() const { return mIsDuplicated; }
+ //MTK added>>
     virtual uint32_t latency() { return 0; }
     virtual bool isFixedVolume(audio_devices_t device);
     virtual bool setVolume(float volumeDb,
@@ -286,6 +290,9 @@ public:
     }
 
     DeviceVector mDevices; /**< current devices this output is routed to */
+    // MTK_AUDIO
+    void setOutputFirstActive(bool firstActive) { mOutputFirstActive = firstActive; };
+    bool mOutputFirstActive;
     wp<AudioPolicyMix> mPolicyMix;  // non NULL when used by a dynamic policy
 
 protected:
@@ -304,6 +311,10 @@ protected:
     RoutingActivities mRoutingActivities; /**< track routing activity on this ouput.*/
 
     VolumeActivities mVolumeActivities; /**< track volume activity on this ouput.*/
+
+    // MTK Added for gainTable_applyAnalogGainFromCheckAndSetVolume
+public:
+    bool mIsDuplicated;
 };
 
 // Audio output driven by a software mixer in audio flinger.
@@ -512,6 +523,12 @@ public:
     sp<SwAudioOutputDescriptor> getOutputForClient(audio_port_handle_t portId);
 
     void dump(String8 *dst) const;
+
+    /**
+     * MTK_AUDIO/MTK_USB_PHONECALL
+     * returns the USB output handle if it is open or 0 otherwise
+     */
+    audio_io_handle_t getUsbOutput() const;
 };
 
 class HwAudioOutputCollection :

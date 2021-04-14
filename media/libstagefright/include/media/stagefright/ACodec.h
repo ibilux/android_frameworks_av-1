@@ -97,8 +97,29 @@ struct ACodec : public AHierarchicalStateMachine, public CodecBase {
 
 protected:
     virtual ~ACodec();
+    virtual status_t setupAudioCodec(
+            status_t err, const char *mime, bool encoder, const sp<AMessage> &msg);
+    virtual status_t setOmxReadMultiFrame(const sp<IOMXNode> & /*omxNode*/,
+                const sp<AMessage> & /*msg*/) {
+                ALOGD("virtual setOmxReadMultiFrame");
+                return BAD_VALUE;
+    };
 
-private:
+    virtual status_t setMtkParameters(const sp<IOMXNode> & /*omxNode*/,
+            const sp<AMessage> & /*params*/, bool /*isEncoder*/) {
+        ALOGD("virtual setMtkParameters");
+        return OK;
+    };
+
+    //mtkadd set AvSyncRefTime to omx
+    virtual status_t setAVSyncTime(const char* /*componentName*/,
+            const sp<AMessage> /*bufferMeta*/,
+            const sp<IOMXNode> & /*omxNode*/,
+            const sp<AMessage> & /*msg*/) {
+        return OK;
+    };
+
+//private:
     struct BaseState;
     struct UninitializedState;
     struct LoadedState;
@@ -565,7 +586,7 @@ private:
     void addKeyFormatChangesToRenderBufferNotification(sp<AMessage> &notify);
     void sendFormatChange();
 
-    status_t getPortFormat(OMX_U32 portIndex, sp<AMessage> &notify);
+    virtual status_t getPortFormat(OMX_U32 portIndex, sp<AMessage> &notify);
 
     void signalError(
             OMX_ERRORTYPE error = OMX_ErrorUndefined,
@@ -586,6 +607,16 @@ private:
 
     // Force EXEC->IDLE->LOADED shutdown sequence if not stale.
     void forceStateTransition(int generation);
+
+    // for ViLTE enhance
+    virtual status_t setViLTEParameters(const sp<IOMXNode> &/*omxNode*/, const sp<AMessage> &/*msg*/, bool /*fgCheckResolutionChange*/){
+        return OK;
+    };
+
+    virtual status_t setThumbnailMode(const char* /*componentName*/,
+        const sp<IOMXNode> &/*omxNode*/, const sp<AMessage> &/*msg*/, bool /*IsEncoder*/){
+        return OK;
+    };
 
     DISALLOW_EVIL_CONSTRUCTORS(ACodec);
 };

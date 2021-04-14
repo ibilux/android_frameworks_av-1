@@ -153,11 +153,17 @@ void MtpPacket::setParameter(int index, uint32_t value) {
 
 #ifdef MTP_HOST
 int MtpPacket::transfer(struct usb_request* request) {
+    // Add timeout to prevent read/write block forevet
+    // 5s for in, 1s for out
     int result = usb_device_bulk_transfer(request->dev,
                             request->endpoint,
                             request->buffer,
                             request->buffer_length,
-                            1000);
+                            (request->endpoint & USB_DIR_IN) ? 5000 : 1000);
+
+    if (result < 0)
+        ALOGE("transfer error:%d", result);
+
     request->actual_length = result;
     return result;
 }

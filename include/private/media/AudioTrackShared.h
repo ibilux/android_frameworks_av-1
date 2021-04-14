@@ -569,6 +569,10 @@ protected:
     int64_t     mReleased;      // our copy of cblk->mServer, at 64 bit resolution
     int64_t     mFlushed;       // flushed frames to account for client-server discrepancy
     ExtendedTimestampQueue::Mutator mTimestampMutator;
+// <MTK_AUDIO
+public:
+    int32_t mIsFast;
+// MTK_AUDIO>
 };
 
 // Proxy used by AudioFlinger for servicing AudioTrack

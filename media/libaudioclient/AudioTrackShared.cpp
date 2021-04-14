@@ -25,6 +25,8 @@
 #include <linux/futex.h>
 #include <sys/syscall.h>
 
+#include<media/MtkLogger.h>
+#define MTK_LOG_LEVEL_SILENCE 4
 namespace android {
 
 // used to clamp a value to size_t.  TODO: move to another file.
@@ -64,6 +66,7 @@ Proxy::Proxy(audio_track_cblk_t* cblk, void *buffers, size_t frameCount, size_t 
       mFrameCountP2(roundup(frameCount)), mIsOut(isOut), mClientInServer(clientInServer),
       mIsShutdown(false), mUnreleased(0)
 {
+    InitializeMTKLogLevel("vendor.af.track.log");
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +155,7 @@ status_t ClientProxy::obtainBuffer(Buffer* buffer, const struct timespec *reques
         int32_t flags = android_atomic_and(~CBLK_INTERRUPT, &cblk->mFlags);
         // check for track invalidation by server, or server death detection
         if (flags & CBLK_INVALID) {
+            MTK_ALOGD("Track invalidated");
             ALOGV("Track invalidated");
             status = DEAD_OBJECT;
             goto end;
@@ -163,6 +167,7 @@ status_t ClientProxy::obtainBuffer(Buffer* buffer, const struct timespec *reques
         }
         // check for obtainBuffer interrupted by client
         if (!ignoreInitialPendingInterrupt && (flags & CBLK_INTERRUPT)) {
+            MTK_ALOGD("obtainBuffer() interrupted by client");
             ALOGV("obtainBuffer() interrupted by client");
             status = -EINTR;
             goto end;
@@ -208,6 +213,8 @@ status_t ClientProxy::obtainBuffer(Buffer* buffer, const struct timespec *reques
         // So use a signed calculation to prevent a numeric overflow abort.
         ssize_t adjustableSize = (ssize_t) getBufferSizeInFrames();
         ssize_t avail =  (mIsOut) ? adjustableSize - filled : filled;
+        MTK_ALOGS(MTK_LOG_LEVEL_SILENCE, "this(%p), mCblk(%p), front(%d), mIsOut %d, avail %d, mFrameCount %d, filled %d",
+                this, mCblk, (int)cblk->u.mStreaming.mFront, (int)mIsOut, (int)avail, (int)mFrameCount, (int)filled);
         if (avail < 0) {
             avail = 0;
         } else if (avail > 0) {
@@ -280,6 +287,8 @@ status_t ClientProxy::obtainBuffer(Buffer* buffer, const struct timespec *reques
                 beforeIsValid = true;
             }
             errno = 0;
+            MTK_ALOGV("this(%p), mCblk(%p), front(%d), mIsOut %d, obtainBuffer() FUTEX_WAIT",
+                    this, mCblk, cblk->u.mStreaming.mFront, mIsOut);
             (void) syscall(__NR_futex, &cblk->mFutex,
                     mClientInServer ? FUTEX_WAIT_PRIVATE : FUTEX_WAIT, old & ~CBLK_FUTEX_WAKE, ts);
             status_t error = errno; // clock_gettime can affect errno
@@ -349,10 +358,22 @@ void ClientProxy::releaseBuffer(Buffer* buffer)
         buffer->mNonContig = 0;
         return;
     }
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+    /// M: ALPS02687122:
+    /// Don't assert when the track restores after obtaining buffer in callback threadloop @{
+    LOG_ALWAYS_FATAL_IF(!(mUnreleased <= mFrameCount));
+    if (!(stepCount <= mUnreleased)) {
+       ALOGW("ClientProxy::releaseBuffer: stepCount(%zu)> mUnreleased(%zu)",
+               stepCount, mUnreleased);
+       return;
+    }
+    /// @}
+#else
     LOG_ALWAYS_FATAL_IF(!(stepCount <= mUnreleased && mUnreleased <= mFrameCount),
             "%s: mUnreleased out of range, "
             "!(stepCount:%zu <= mUnreleased:%zu <= mFrameCount:%zu), BufferSizeInFrames:%u",
             __func__, stepCount, mUnreleased, mFrameCount, getBufferSizeInFrames());
+#endif
     mUnreleased -= stepCount;
     audio_track_cblk_t* cblk = mCblk;
     // Both of these barriers are required
@@ -369,6 +390,8 @@ void ClientProxy::binderDied()
 {
     audio_track_cblk_t* cblk = mCblk;
     if (!(android_atomic_or(CBLK_INVALID, &cblk->mFlags) & CBLK_INVALID)) {
+        MTK_ALOGD("this(%p), mCblk(%p), front(%d), mIsOut %d, binderDied() FUTEX_WAKE",
+                this, mCblk, cblk->u.mStreaming.mFront, mIsOut);
         android_atomic_or(CBLK_FUTEX_WAKE, &cblk->mFutex);
         // it seems that a FUTEX_WAKE_PRIVATE will not wake a FUTEX_WAIT, even within same process
         (void) syscall(__NR_futex, &cblk->mFutex, mClientInServer ? FUTEX_WAKE_PRIVATE : FUTEX_WAKE,
@@ -380,6 +403,8 @@ void ClientProxy::interrupt()
 {
     audio_track_cblk_t* cblk = mCblk;
     if (!(android_atomic_or(CBLK_INTERRUPT, &cblk->mFlags) & CBLK_INTERRUPT)) {
+        MTK_ALOGV("this(%p), mCblk(%p), front(%d), mIsOut %d, interrupt() FUTEX_WAKE",
+                this, mCblk, cblk->u.mStreaming.mFront, mIsOut);
         android_atomic_or(CBLK_FUTEX_WAKE, &cblk->mFutex);
         (void) syscall(__NR_futex, &cblk->mFutex, mClientInServer ? FUTEX_WAKE_PRIVATE : FUTEX_WAKE,
                 1);
@@ -534,6 +559,8 @@ status_t AudioTrackClientProxy::waitStreamEndDone(const struct timespec *request
         int32_t old = android_atomic_and(~CBLK_FUTEX_WAKE, &cblk->mFutex);
         if (!(old & CBLK_FUTEX_WAKE)) {
             errno = 0;
+            MTK_ALOGD("this(%p), mCblk(%p), front(%d), mIsOut %d, waitStreamEndDone() FUTEX_WAKE",
+                    this, mCblk, cblk->u.mStreaming.mFront, mIsOut);
             (void) syscall(__NR_futex, &cblk->mFutex,
                     mClientInServer ? FUTEX_WAIT_PRIVATE : FUTEX_WAIT, old & ~CBLK_FUTEX_WAKE, ts);
             switch (errno) {
@@ -662,6 +689,9 @@ ServerProxy::ServerProxy(audio_track_cblk_t* cblk, void *buffers, size_t frameCo
       mAvailToClient(0), mFlush(0), mReleased(0), mFlushed(0)
     , mTimestampMutator(&cblk->mExtendedTimestampQueue)
 {
+// <MTK_AUDIO
+    mIsFast = 0;
+// MTK_AUDIO>
     cblk->mBufferSizeInFrames = frameCount;
 }
 
@@ -875,12 +905,16 @@ void ServerProxy::releaseBuffer(Buffer* buffer)
     }
     // FIXME AudioRecord wakeup needs to be optimized; it currently wakes up client every time
     if (!mIsOut || (mAvailToClient + stepCount >= minimum)) {
-        ALOGV("mAvailToClient=%zu stepCount=%zu minimum=%zu", mAvailToClient, stepCount, minimum);
+        MTK_ALOGV("this(%p), mCblk(%p), front(%d), mIsOut(%d), mAvailToClient=%zu stepCount=%zu minimum=%zu, FUTEX_WAKE",
+                this, mCblk, cblk->u.mStreaming.mFront, mIsOut, mAvailToClient, stepCount, minimum);
         int32_t old = android_atomic_or(CBLK_FUTEX_WAKE, &cblk->mFutex);
         if (!(old & CBLK_FUTEX_WAKE)) {
             (void) syscall(__NR_futex, &cblk->mFutex,
                     mClientInServer ? FUTEX_WAKE_PRIVATE : FUTEX_WAKE, 1);
         }
+    } else {
+        MTK_ALOGV("this(%p), mCblk(%p), front(%d), mIsOut(%d), mAvailToClient=%zu stepCount=%zu minimum=%zu",
+                this, mCblk, cblk->u.mStreaming.mFront, mIsOut, mAvailToClient, stepCount, minimum);
     }
 
     buffer->mFrameCount = 0;
@@ -1210,6 +1244,8 @@ void StaticAudioTrackServerProxy::releaseBuffer(Buffer* buffer)
         // this would be a good place to wake a futex
     }
 
+    MTK_ALOGV("StaticAudioTrackServerProxy::releaseBuffer: this(%p), mCblk(%p), stepCount, position, newPosition, %zu, %zu, %zu",
+            this, mCblk, stepCount, position, newPosition);
     buffer->mFrameCount = 0;
     buffer->mRaw = NULL;
     buffer->mNonContig = 0;

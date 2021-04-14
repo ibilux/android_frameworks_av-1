@@ -137,7 +137,7 @@ status_t AudioPolicyService::AudioPolicyClient::invalidateStream(audio_stream_ty
     if (af == 0) {
         return PERMISSION_DENIED;
     }
-
+    ALOGD("%s: type %d", __func__, stream);
     return af->invalidateStream(stream);
 }
 
@@ -238,6 +238,11 @@ void AudioPolicyService::AudioPolicyClient::onAudioVolumeGroupChanged(volume_gro
 audio_unique_id_t AudioPolicyService::AudioPolicyClient::newAudioUniqueId(audio_unique_id_use_t use)
 {
     return AudioSystem::newAudioUniqueId(use);
+}
+
+status_t AudioPolicyService::AudioPolicyClient::getCustomAudioVolume(void* pCustomVol)
+{
+    return mAudioPolicyService->getCustomAudioVolume(pCustomVol);   // MTK_AUDIO_GAIN_TABLE
 }
 
 } // namespace android

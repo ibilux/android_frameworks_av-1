@@ -16,6 +16,9 @@
 
 #define LOG_TAG "APM::AudioPort"
 //#define LOG_NDEBUG 0
+#if defined(MTK_AUDIO_DEBUG) && defined(CONFIG_MT_ENG_BUILD)
+#define LOG_NDEBUG 0
+#endif
 #include "TypeConverter.h"
 #include "AudioPort.h"
 #include "HwModule.h"
@@ -375,6 +378,44 @@ void AudioPort::dump(String8 *dst, int spaces, bool verbose) const
 void AudioPort::log(const char* indent) const
 {
     ALOGI("%s Port[nm:%s, type:%d, role:%d]", indent, mName.string(), mType, mRole);
+}
+
+bool AudioPort::isSamplingRateSupport(uint32_t samplingRate)
+{
+#if defined(MTK_AUDIO)
+    for (size_t i = 0; i < mProfiles.size(); i++) {
+        if (!mProfiles[i]->isValid()) {
+            continue;
+        }
+        if (mProfiles[i]->supportsRate(samplingRate)) {
+            return true;
+        }
+    }
+    ALOGW("[%s] Unsupport sampling rate [%d] for %zu mProfiles", __FUNCTION__, samplingRate, mProfiles.size());
+    return false;
+#else
+    ALOGW("[%s] Always support sampling rate [%d] for %zu mProfiles", __FUNCTION__, samplingRate, mProfiles.size());
+    return true;
+#endif
+}
+
+bool AudioPort::isChannelMaskSupport(audio_channel_mask_t channelMask)
+{
+#if defined(MTK_AUDIO)
+    for (size_t i = 0; i < mProfiles.size(); i++) {
+        if (!mProfiles[i]->isValid()) {
+            continue;
+        }
+        if (mProfiles[i]->supportsChannels(channelMask)) {
+            return true;
+        }
+    }
+    ALOGW("[%s] Unsupport channel mask [0x%x] for %zu mProfiles", __FUNCTION__, channelMask, mProfiles.size());
+    return false;
+#else
+    ALOGW("[%s] Always support channel mask [0x%x] for %zu mProfiles", __FUNCTION__, channelMask, mProfiles.size());
+    return true;
+#endif
 }
 
 // --- AudioPortConfig class implementation

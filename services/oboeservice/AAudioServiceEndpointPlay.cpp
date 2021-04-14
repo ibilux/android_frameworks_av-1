@@ -36,6 +36,11 @@
 #include "AAudioServiceEndpointShared.h"
 #include "AAudioServiceStreamBase.h"
 
+#if defined(MTK_AUDIO_DEBUG)
+#include <string.h>
+#include <media/AudioUtilmtk.h>
+#endif
+
 using namespace android;  // TODO just import names needed
 using namespace aaudio;   // TODO just import names needed
 
@@ -140,6 +145,22 @@ void *AAudioServiceEndpointPlay::callbackLoop() {
                 index++; // just used for labelling tracks in systrace
             }
         }
+
+#if defined(MTK_AUDIO_DEBUG)
+        {
+            using namespace android;
+            if (AudioDump::getProperty(AudioDump::PROP_AUDIO_DUMP_AAUDIO)) {
+                String8 fileName = String8::format("%s_pid%d_tid%d.pcm",
+                                                   AudioDump::aaudio_share_dl,
+                                                   getpid(), gettid());
+                AudioDump::threadDump(fileName, mMixer.getOutputBuffer(),
+                           getFramesPerBurst()*getStreamInternal()->getBytesPerFrame(),
+                           AAudioConvert_aaudioToAndroidDataFormat(getStreamInternal()->getFormat()),
+                           getStreamInternal()->getSampleRate(),
+                           getStreamInternal()->getSamplesPerFrame());
+            }
+        }
+#endif
 
         // Write mixer output to stream using a blocking write.
         result = getStreamInternal()->write(mMixer.getOutputBuffer(),

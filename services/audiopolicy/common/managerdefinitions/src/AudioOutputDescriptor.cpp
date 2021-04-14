@@ -16,6 +16,9 @@
 
 #define LOG_TAG "APM::AudioOutputDescriptor"
 //#define LOG_NDEBUG 0
+#if defined(MTK_AUDIO_DEBUG)
+#define LOG_NDEBUG 0
+#endif
 
 #include <AudioPolicyInterface.h>
 #include "AudioOutputDescriptor.h"
@@ -27,6 +30,18 @@
 #include "TypeConverter.h"
 #include <media/AudioParameter.h>
 #include <media/AudioPolicy.h>
+#if defined(MTK_AUDIO)
+#include <media/AudioUtilmtk.h>
+#include <media/MtkLogger.h>
+#endif // MTK_AUDIO
+
+#if defined(MTK_AUDIO_DEBUG)
+#if defined(CONFIG_MT_ENG_BUILD)
+static int log_enable = 1;
+#else
+static int log_enable = __android_log_is_loggable(ANDROID_LOG_DEBUG, LOG_TAG, ANDROID_LOG_INFO);
+#endif
+#endif
 
 // A device mask for all audio output devices that are considered "remote" when evaluating
 // active output devices in isStreamActiveRemotely()
@@ -36,7 +51,12 @@ namespace android {
 
 AudioOutputDescriptor::AudioOutputDescriptor(const sp<AudioPort>& port,
                                              AudioPolicyClientInterface *clientInterface)
-    : mPort(port), mClientInterface(clientInterface)
+    : mOutputFirstActive(false)
+    , mPort(port)
+    , mClientInterface(clientInterface)
+//<<MTK added
+    ,mIsDuplicated(false)
+//MTK added>>
 {
     if (mPort.get() != nullptr) {
         mPort->pickAudioProfile(mSamplingRate, mChannelMask, mFormat);
@@ -44,6 +64,7 @@ AudioOutputDescriptor::AudioOutputDescriptor(const sp<AudioPort>& port,
             mPort->mGains[0]->getDefaultConfig(&mGain);
         }
     }
+    InitializeMTKLogLevel("vendor.af.policy.debug");
 }
 
 audio_config_base_t AudioOutputDescriptor::getConfig() const
@@ -103,7 +124,8 @@ void AudioOutputDescriptor::setClientActive(const sp<TrackClientDescriptor>& cli
     // If ps is unknown, it is time to track it!
     mRoutingActivities[client->strategy()].changeActivityCount(delta);
     mVolumeActivities[client->volumeSource()].changeActivityCount(delta);
-
+    MTK_ALOGS(4, "%s,(%s) active %d volume source %d activityCount %d", __func__, client->toShortString().c_str(),
+        active, client->volumeSource(), mVolumeActivities[client->volumeSource()].getActivityCount());
     // Handle non-client-specific activity ref count
     int32_t oldGlobalActiveCount = mGlobalActiveCount;
     if (!active && mGlobalActiveCount < 1) {
@@ -138,6 +160,8 @@ bool AudioOutputDescriptor::isActive(uint32_t inPastMs) const
     }
     for (const auto &iter : mVolumeActivities) {
         if (iter.second.isActive(inPastMs, sysTime)) {
+            MTK_ALOGS(4, "%s volsrc %d, ActivityCount: %d, StopTime: %" PRId64 ", ",
+                          __FUNCTION__, iter.first, iter.second.getActivityCount(),  iter.second.getStopTime());
             return true;
         }
     }
@@ -435,10 +459,12 @@ bool SwAudioOutputDescriptor::setVolume(float volumeDb,
     // Force VOICE_CALL to track BLUETOOTH_SCO stream volume when bluetooth audio is enabled
     float volumeAmpl = Volume::DbToAmpl(getCurVolume(vs));
     if (hasStream(streams, AUDIO_STREAM_BLUETOOTH_SCO)) {
+        ALOGD("%s output %d for volumeSource %d, volume %f, delay %d AUDIO_STREAM_BLUETOOTH_SCO", __func__,
+              mIoHandle, vs, volumeDb, delayMs);
         mClientInterface->setStreamVolume(AUDIO_STREAM_VOICE_CALL, volumeAmpl, mIoHandle, delayMs);
     }
     for (const auto &stream : streams) {
-        ALOGV("%s output %d for volumeSource %d, volume %f, delay %d stream=%s", __func__,
+        ALOGD("%s output %d for volumeSource %d, volume %f, delay %d stream=%s", __func__,
               mIoHandle, vs, volumeDb, delayMs, toString(stream).c_str());
         mClientInterface->setStreamVolume(stream, volumeAmpl, mIoHandle, delayMs);
     }
@@ -597,6 +623,9 @@ status_t SwAudioOutputDescriptor::openDuplicating(const sp<SwAudioOutputDescript
     mFormat = output2->mFormat;
     mChannelMask = output2->mChannelMask;
     mLatency = output2->mLatency;
+#if defined(MTK_AUDIO)
+    mIsDuplicated = true;
+#endif
 
     return NO_ERROR;
 }
@@ -813,6 +842,19 @@ void HwAudioOutputCollection::dump(String8 *dst) const
         dst->appendFormat("- Output %d dump:\n", keyAt(i));
         valueAt(i)->dump(dst);
     }
+}
+
+audio_io_handle_t SwAudioOutputCollection::getUsbOutput() const
+{
+    if (FeatureOption::MTK_USB_PHONECALL) {
+        for (size_t i = 0; i < size(); i++) {
+            sp<SwAudioOutputDescriptor> outputDesc = valueAt(i);
+            if (!outputDesc->isDuplicated() && (outputDesc->devices().types() & (AUDIO_DEVICE_OUT_USB_DEVICE | AUDIO_DEVICE_OUT_USB_HEADSET))) {
+                return this->keyAt(i);
+            }
+        }
+    }
+    return 0;
 }
 
 }; //namespace android

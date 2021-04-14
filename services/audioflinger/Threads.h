@@ -667,6 +667,11 @@ protected:
 
                 SimpleLog mLocalLog;
 
+//MTK_AUDIO_FIX_DEFAULT_DEFECT> // ALPS03762573 : music seek
+public:
+    DefaultKeyedVector< int32_t , bool >mFlushShareBuffer;
+//MTK_AUDIO_FIX_DEFAULT_DEFECT>
+
 private:
                 void dumpBase_l(int fd, const Vector<String16>& args);
                 void dumpEffectChains_l(int fd, const Vector<String16>& args);
@@ -1163,6 +1168,23 @@ protected:
                 // volumes last sent to audio HAL with stream->setVolume()
                 float mLeftVolFloat;
                 float mRightVolFloat;
+
+// <MTK_AUDIOMIXER_ENABLE_DRC
+protected:
+    virtual     void        releaseTrackDrc_l(int name) = 0;
+// MTK_AUDIOMIXER_ENABLE_DRC>
+
+private:
+// <MTK_AUDIO_DEBUG
+    bool        mWriteMutedData;       // Whether write muted data to HAL.
+    int         mWriteMutedDataCount;  // The frame count of muted data.
+// MTK_AUDIO_DEBUG>
+// <MTK_AUDIOMIXER_ENABLE_DRC
+    audio_devices_t mOutputDevice;
+    String8 mCustomScene;
+    bool mUpdateACFHCFParam;
+    bool mUpdateCustomSceneParam;
+// MTK_AUDIOMIXER_ENABLE_DRC>
 };
 
 class MixerThread : public PlaybackThread {
@@ -1262,6 +1284,20 @@ protected:
                                    mFastMixer->setMasterBalance(balance);
                                }
                            }
+// <MTK_AUDIOMIXER_ENABLE_DRC
+private:
+    // ALPS04408933 low latency support drc
+    enum drc_command {
+        DRC_ENALBLE,
+        DRC_UPDATE_PARAM,
+        DRC_CUSTOM_SCENE
+    };
+
+    void        DRCParse(drc_command command, bool enable, String8 strValue);
+
+protected:
+    virtual     void        releaseTrackDrc_l(int name);
+// MTK_AUDIOMIXER_ENABLE_DRC>
 };
 
 class DirectOutputThread : public PlaybackThread {
@@ -1338,6 +1374,10 @@ public:
                     }
                     return INVALID_OPERATION;
                 }
+// <MTK_AUDIOMIXER_ENABLE_DRC
+protected:
+    virtual     void        releaseTrackDrc_l(int name);
+// MTK_AUDIOMIXER_ENABLE_DRC>
 };
 
 class OffloadThread : public DirectOutputThread {
@@ -1406,12 +1446,15 @@ private:
 
 class DuplicatingThread : public MixerThread {
 public:
+// <MTK_AUDIO_FIX_DEFAULT_DEFECT
     DuplicatingThread(const sp<AudioFlinger>& audioFlinger, MixerThread* mainThread,
-                      audio_io_handle_t id, bool systemReady);
+                      audio_io_handle_t id, bool systemReady, uint32_t latency = 0);
+// MTK_AUDIO_FIX_DEFAULT_DEFECT>
     virtual                 ~DuplicatingThread();
 
-    // Thread virtuals
-                void        addOutputTrack(MixerThread* thread);
+// <MTK_AUDIO_FIX_DEFAULT_DEFECT
+                void        addOutputTrack(MixerThread* thread, uint32_t latency = 0);
+// MTK_AUDIO_FIX_DEFAULT_DEFECT>
                 void        removeOutputTrack(MixerThread* thread);
                 uint32_t    waitTimeMs() const { return mWaitTimeMs; }
 
@@ -1552,7 +1595,8 @@ public:
                     audio_input_flags_t *flags,
                     pid_t tid,
                     status_t *status /*non-NULL*/,
-                    audio_port_handle_t portId);
+                    audio_port_handle_t portId,
+                    const String16& opPackageName);
 
             status_t    start(RecordTrack* recordTrack,
                               AudioSystem::sync_event_t event,

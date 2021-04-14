@@ -69,6 +69,11 @@ ssize_t MonoPipe::write(const void *buffer, size_t count)
         return NEGOTIATE;
     }
     size_t totalFramesWritten = 0;
+
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+    uint32_t totalSleepTime = 0;
+    uint32_t maxWriteTime = count * (10000000000 / Format_sampleRate(mFormat));
+#endif
     while (count > 0) {
         ssize_t actual = mFifoWriter.write(buffer, count);
         ALOG_ASSERT(actual <= count);
@@ -83,6 +88,13 @@ ssize_t MonoPipe::write(const void *buffer, size_t count)
         if (!mWriteCanBlock || mIsShutdown) {
             break;
         }
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+        // ALPS04697210 break loop if total sleep time > 10* count time
+        if (totalSleepTime > maxWriteTime) {
+            ALOGE("totalSleepTime %d > maxWriteTime %d break monopipe write", totalSleepTime, maxWriteTime);
+            break;
+        }
+#endif
         count -= written;
         buffer = (char *) buffer + (written * mFrameSize);
         // TODO Replace this whole section by audio_util_fifo's setpoint feature.
@@ -147,6 +159,9 @@ ssize_t MonoPipe::write(const void *buffer, size_t count)
         if (ns > 0) {
             const struct timespec req = {0, static_cast<long>(ns)};
             nanosleep(&req, NULL);
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+            totalSleepTime += ns;
+#endif
         }
         // record the time that this write() completed
         if (nowTsValid) {

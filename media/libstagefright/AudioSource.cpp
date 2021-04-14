@@ -128,6 +128,7 @@ status_t AudioSource::initCheck() const {
 }
 
 status_t AudioSource::start(MetaData *params) {
+    ALOGD("start+");
     Mutex::Autolock autoLock(mLock);
     if (mStarted) {
         return UNKNOWN_ERROR;
@@ -152,7 +153,7 @@ status_t AudioSource::start(MetaData *params) {
         mRecord.clear();
     }
 
-
+    ALOGD("start-");
     return err;
 }
 
@@ -167,13 +168,14 @@ void AudioSource::releaseQueuedFrames_l() {
 }
 
 void AudioSource::waitOutstandingEncodingFrames_l() {
-    ALOGV("waitOutstandingEncodingFrames_l: %" PRId64, mNumClientOwnedBuffers);
+    ALOGD("waitOutstandingEncodingFrames_l: %" PRId64, mNumClientOwnedBuffers);
     while (mNumClientOwnedBuffers > 0) {
         mFrameEncodingCompletionCondition.wait(mLock);
     }
 }
 
 status_t AudioSource::reset() {
+    ALOGD("reset+");
     Mutex::Autolock autoLock(mLock);
     if (!mStarted) {
         return UNKNOWN_ERROR;
@@ -191,7 +193,7 @@ status_t AudioSource::reset() {
     mRecord->stop();
     waitOutstandingEncodingFrames_l();
     releaseQueuedFrames_l();
-
+    ALOGD("reset-");
     return OK;
 }
 
@@ -253,8 +255,13 @@ status_t AudioSource::read(
     }
 
     while (mStarted && mBuffersReceived.empty()) {
-        mFrameAvailableCondition.wait(mLock);
+        if (NO_ERROR != mFrameAvailableCondition.waitRelative(mLock, 3000000000LL)) {
+            ALOGW("Timed out waiting for incoming audio frames: %" PRId64 " us", mLastFrameTimestampUs);
+        }
         if (mNoMoreFramesToRead) {
+            return OK;
+        }
+        if (mStopSystemTimeUs != -1 && systemTime() / 1000ll >= mStopSystemTimeUs) {
             return OK;
         }
     }

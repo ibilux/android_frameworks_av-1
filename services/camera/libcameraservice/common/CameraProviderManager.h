@@ -269,8 +269,15 @@ public:
      */
     bool isLogicalCamera(const std::string& id, std::vector<std::string>* physicalCameraIds);
 
-    bool isPublicallyHiddenSecureCamera(const std::string& id);
-    bool isHiddenPhysicalCamera(const std::string& cameraId);
+    bool isPublicallyHiddenSecureCamera(const std::string& id) const;
+    bool isHiddenPhysicalCamera(const std::string& cameraId) const;
+    static bool isLogicalCamera(const CameraMetadata& staticInfo,
+            std::vector<std::string>* physicalCameraIds);
+//!++
+public:
+    status_t getProperty(String8 const& key, String8& value);
+    status_t setProperty(String8 const& key, String8 const& value);
+//!--
 
     static const float kDepthARTolerance;
 private:
@@ -567,7 +574,12 @@ private:
             hardware::hidl_version minVersion = hardware::hidl_version{0,0},
             hardware::hidl_version maxVersion = hardware::hidl_version{1000,0}) const;
 
+    //!++ The patch is provided by Google, it will be fixed in final release version by Google.
+    #if 0
     status_t addProviderLocked(const std::string& newProvider, bool expected = true);
+    #endif
+    status_t addProviderLocked(const std::string& newProvider);
+    //!--
 
     status_t removeProvider(const std::string& provider);
     sp<StatusListener> getStatusListener() const;
@@ -591,7 +603,15 @@ private:
 
     status_t getCameraCharacteristicsLocked(const std::string &id,
             CameraMetadata* characteristics) const;
+
+    bool isPublicallyHiddenSecureCameraLocked(const std::string& id) const;
+
     void filterLogicalCameraIdsLocked(std::vector<std::string>& deviceIds) const;
+
+    bool isPublicallyHiddenSecureCameraLocked(const std::string& id);
+
+    std::pair<bool, CameraProviderManager::ProviderInfo::DeviceInfo *>
+            isHiddenPhysicalCameraInternal(const std::string& cameraId) const;
 };
 
 } // namespace android

@@ -1312,7 +1312,8 @@ void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
                 }
 
                 restartAudio(
-                        positionUs, reason == Renderer::kForceNonOffload /* forceNonOffload */,
+                        positionUs, (reason == Renderer::kForceNonOffload) ||
+                        (reason == Renderer::kDueToError) /* forceNonOffload, mtk modify: add kDueToError*/,
                         reason != Renderer::kDueToTimeout /* needsToCreateAudioDecoder */);
             }
             break;

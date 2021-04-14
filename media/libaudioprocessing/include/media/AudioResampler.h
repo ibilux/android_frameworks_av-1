@@ -47,6 +47,7 @@ public:
         DYN_LOW_QUALITY=5,
         DYN_MED_QUALITY=6,
         DYN_HIGH_QUALITY=7,
+        MTK_DYN_HIGH_QUALITY=8, /*MTK_AUDIO*/
     };
 
     static const CONSTEXPR float UNITY_GAIN_FLOAT = 1.0f;

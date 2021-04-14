@@ -37,6 +37,7 @@ cc_library_shared {
         "libstagefright_foundation",
         "libstagefright_httplive",
         "libutils",
+        "libstagefright_wfd_mtk",
     ],
 
     header_libs: [
@@ -47,6 +48,7 @@ cc_library_shared {
         "libstagefright_nuplayer",
         "libstagefright_rtsp",
         "libstagefright_timedtext",
+        "libavextensions",
     ],
 
     export_shared_lib_headers: ["libmedia"],
@@ -54,6 +56,9 @@ cc_library_shared {
     include_dirs: [
         "frameworks/av/media/libstagefright/rtsp",
         "frameworks/av/media/libstagefright/webm",
+        "vendor/mediatek/proprietary/frameworks/av/AVEnhance/libmtkavenhancements",
+    	"vendor/mediatek/proprietary/frameworks/av/AVEnhance/libavextensions",
+    	"vendor/mediatek/proprietary/frameworks/av/AVEnhance/libmtkavenhancements/wifi-display",
     ],
 
     local_include_dirs: ["include"],

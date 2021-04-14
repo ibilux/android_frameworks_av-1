@@ -239,7 +239,7 @@ size_t MediaAnalyticsItem::findPropIndex(const char *name, size_t len)
     size_t i = 0;
     for (; i < mPropCount; i++) {
         Prop *prop = &mProps[i];
-        if (prop->mNameLen != len) {
+        if (prop->mNameLen != len || prop->mName == NULL) {
             continue;
         }
         if (memcmp(name, prop->mName, len) == 0) {
@@ -271,6 +271,7 @@ void MediaAnalyticsItem::Prop::setName(const char *name, size_t len) {
 // consider this "find-or-allocate".
 // caller validates type and uses clearPropValue() accordingly
 MediaAnalyticsItem::Prop *MediaAnalyticsItem::allocateProp(const char *name) {
+    Mutex::Autolock _l(mLock);
     size_t len = strlen(name);
     size_t i = findPropIndex(name, len);
     Prop *prop;
@@ -287,6 +288,7 @@ MediaAnalyticsItem::Prop *MediaAnalyticsItem::allocateProp(const char *name) {
         i = mPropCount++;
         prop = &mProps[i];
         prop->setName(name, len);
+        prop->u.CStringValue = 0;
     }
 
     return prop;
@@ -764,7 +766,11 @@ int32_t MediaAnalyticsItem::writeToParcel0(Parcel *data) {
                         data->writeInt64(prop->u.rate.duration);
                         break;
                 case MediaAnalyticsItem::kTypeCString:
-                        data->writeCString(prop->u.CStringValue);
+                        if (prop->u.CStringValue) {
+                            data->writeCString(prop->u.CStringValue);
+                        } else {
+                            ALOGE("found CStringValue null");
+                        }
                         break;
                 default:
                         ALOGE("found bad Prop type: %d, idx %d, name %s",

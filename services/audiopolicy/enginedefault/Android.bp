@@ -9,6 +9,7 @@ cc_library_shared {
         "-Wall",
         "-Werror",
         "-Wextra",
+        "-DMTK_AUDIO"
     ],
     local_include_dirs: ["include"],
     header_libs: [
@@ -28,5 +29,39 @@ cc_library_shared {
         "libmedia_helper",
         "libaudiopolicy",
         "libxml2",
+        "libaudioutilmtk",
+    ],
+    include_dirs: [
+        "frameworks/av/services/audiopolicy/custom_extensions",
+        "frameworks/av/services/audiopolicy",
+        "external/libxml2/include",
+        "external/icu/libandroidicu/include",
+        "vendor/mediatek/proprietary/external/AudioParamParser",
+        "vendor/mediatek/proprietary/external/AudioParamParser/include",
     ],
 }
+// <MTK_AUDIO
+bootstrap_go_package {
+    name:"soong-libaudiopolicyenginedefault-mediatek",
+    pkgPath:"android/soong/libaudiopolicyenginedefault/mediatek",
+    deps:[
+        "soong-android",
+        "soong-cc",
+    ],
+    srcs:[
+        "libaudiopolicyenginedefault.go",
+    ],
+    pluginFor:["soong_build"],
+}
+
+mtk_libaudiopolicyenginedefault_defaults {
+    name: "mtk_libaudiopolicyenginedefault_defaults",
+    cflags: [
+        "-DSYS_IMPL",
+    ],
+    include_dirs: [
+        "frameworks/av/services/audiopolicy/custom_extensions",
+        "frameworks/av/services/audiopolicy",
+    ],
+}
+// MTK_AUDIO>

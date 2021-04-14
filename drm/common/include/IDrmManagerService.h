@@ -139,6 +139,9 @@ public:
     virtual status_t getAllSupportInfo(
             int uniqueId, int* length, DrmSupportInfo** drmSupportInfoArray) = 0;
 
+    // Add by rui to pass client's client to drmserver
+    virtual sp<DecryptHandle> openDecryptSession(int uniqueId, int fd, off64_t offset, off64_t length,
+            const char* mime, pid_t pid) = 0;
     virtual sp<DecryptHandle> openDecryptSession(
                 int uniqueId, int fd, off64_t offset,
                 off64_t length, const char* mime) = 0;
@@ -230,6 +233,9 @@ public:
                 int uniqueId, int fd, off64_t offset, off64_t length,
                 const char* mime);
 
+    // Add by rui to pass client's client to drmserver
+    virtual sp<DecryptHandle> openDecryptSession(int uniqueId, int fd, off64_t offset, off64_t length,
+            const char* mime, pid_t pid);
     virtual sp<DecryptHandle> openDecryptSession(
                 int uniqueId, const char* uri, const char* mime);
 

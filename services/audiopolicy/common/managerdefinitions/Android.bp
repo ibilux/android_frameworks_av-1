@@ -27,6 +27,7 @@ cc_library_static {
         "libmedia",
         "libutils",
         "libxml2",
+        "libaudioutilmtk",
     ],
     export_shared_lib_headers: ["libmedia"],
     static_libs: [
@@ -40,6 +41,10 @@ cc_library_static {
 
     include_dirs: [
         "frameworks/av/services/audiopolicy",
+        "external/libxml2/include",
+        "external/icu/libandroidicu/include",
+        "vendor/mediatek/proprietary/external/AudioParamParser",
+        "vendor/mediatek/proprietary/external/AudioParamParser/include",
     ],
 
     export_include_dirs: ["include"],
@@ -47,6 +52,7 @@ cc_library_static {
     cflags: [
         "-Wall",
         "-Werror",
+        "-DMTK_AUDIO",
     ],
 
 }

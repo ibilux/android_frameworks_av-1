@@ -110,7 +110,7 @@ status_t SoundTriggerHwService::attach(const String16& opPackageName,
                         const sp<ISoundTriggerClient>& client,
                         sp<ISoundTrigger>& moduleInterface)
 {
-    ALOGV("attach module %d", handle);
+    ALOGI("attach module %d", handle);
     if (!captureHotwordAllowed(opPackageName,
                                IPCThreadState::self()->getCallingPid(),
                                IPCThreadState::self()->getCallingUid())) {
@@ -141,7 +141,7 @@ status_t SoundTriggerHwService::attach(const String16& opPackageName,
 
 status_t SoundTriggerHwService::setCaptureState(bool active)
 {
-    ALOGV("setCaptureState %d", active);
+    ALOGI("setCaptureState(): active = %d", active);
     AutoMutex lock(mServiceLock);
     mCaptureState = active;
     for (size_t i = 0; i < mModules.size(); i++) {
@@ -354,7 +354,7 @@ void SoundTriggerHwService::sendCallbackEvent(const sp<CallbackEvent>& event)
 
 void SoundTriggerHwService::onCallbackEvent(const sp<CallbackEvent>& event)
 {
-    ALOGV("onCallbackEvent");
+    ALOGI("onCallbackEvent");
     sp<Module> module;
     sp<ModuleClient> moduleClient;
     {
@@ -505,7 +505,7 @@ SoundTriggerHwService::Module::addClient(const sp<ISoundTriggerClient>& client,
 
 void SoundTriggerHwService::Module::detach(const sp<ModuleClient>& moduleClient)
 {
-    ALOGV("Module::detach()");
+    ALOGI("detach()");
     Vector<audio_session_t> releasedSessions;
 
     {
@@ -522,7 +522,7 @@ void SoundTriggerHwService::Module::detach(const sp<ModuleClient>& moduleClient)
             return;
         }
 
-        ALOGV("remove client %p", moduleClient.get());
+        ALOGW("remove client %p", moduleClient.get());
         mModuleClients.removeAt(index);
 
         // Iterate in reverse order as models are removed from list inside the loop.
@@ -530,7 +530,7 @@ void SoundTriggerHwService::Module::detach(const sp<ModuleClient>& moduleClient)
             sp<Model> model = mModels.valueAt(i - 1);
             if (moduleClient == model->mModuleClient) {
                 mModels.removeItemsAt(i - 1);
-                ALOGV("detach() unloading model %d", model->mHandle);
+                ALOGW("detach() unloading model %d", model->mHandle);
                 if (mHalInterface != 0) {
                     if (model->mState == Model::STATE_ACTIVE) {
                         mHalInterface->stopRecognition(model->mHandle);
@@ -552,7 +552,7 @@ status_t SoundTriggerHwService::Module::loadSoundModel(const sp<IMemory>& modelM
                                                        sp<ModuleClient> moduleClient,
                                                        sound_model_handle_t *handle)
 {
-    ALOGV("loadSoundModel() handle");
+    ALOGI("loadSoundModel()");
     if (mHalInterface == 0) {
         return NO_INIT;
     }
@@ -616,7 +616,7 @@ exit:
 
 status_t SoundTriggerHwService::Module::unloadSoundModel(sound_model_handle_t handle)
 {
-    ALOGV("unloadSoundModel() model handle %d", handle);
+    ALOGI("unloadSoundModel(): model handle = %d", handle);
     status_t status;
     audio_session_t session;
 
@@ -646,7 +646,7 @@ status_t SoundTriggerHwService::Module::unloadSoundModel(sound_model_handle_t ha
 status_t SoundTriggerHwService::Module::startRecognition(sound_model_handle_t handle,
                                  const sp<IMemory>& dataMemory)
 {
-    ALOGV("startRecognition() model handle %d", handle);
+    ALOGI("startRecognition(): model handle = %d", handle);
     if (mHalInterface == 0) {
         return NO_INIT;
     }
@@ -693,7 +693,7 @@ status_t SoundTriggerHwService::Module::startRecognition(sound_model_handle_t ha
 
 status_t SoundTriggerHwService::Module::stopRecognition(sound_model_handle_t handle)
 {
-    ALOGV("stopRecognition() model handle %d", handle);
+    ALOGI("stopRecognition(): model handle = %d", handle);
     if (mHalInterface == 0) {
         return NO_INIT;
     }
@@ -732,7 +732,7 @@ status_t SoundTriggerHwService::Module::getModelState(sound_model_handle_t handl
 
 void SoundTriggerHwService::Module::onCallbackEvent(const sp<CallbackEvent>& event)
 {
-    ALOGV("onCallbackEvent type %d", event->mType);
+    ALOGI("onCallbackEvent(), type %d", event->mType);
 
     sp<IMemory> eventMemory = event->mMemory;
 
@@ -813,7 +813,7 @@ sp<SoundTriggerHwService::Model> SoundTriggerHwService::Module::getModel(
 // Called with mServiceLock held
 void SoundTriggerHwService::Module::setCaptureState_l(bool active)
 {
-    ALOGV("Module::setCaptureState_l %d", active);
+    ALOGI("setCaptureState_l(): active = %d", active);
     sp<SoundTriggerHwService> service;
     sound_trigger_service_state_t state;
 
@@ -943,7 +943,7 @@ status_t SoundTriggerHwService::ModuleClient::dump(int fd __unused,
 }
 
 void SoundTriggerHwService::ModuleClient::detach() {
-    ALOGV("detach()");
+    ALOGI("detach()");
     if (!captureHotwordAllowed(mOpPackageName,
                                IPCThreadState::self()->getCallingPid(),
                                IPCThreadState::self()->getCallingUid())) {
@@ -968,7 +968,7 @@ void SoundTriggerHwService::ModuleClient::detach() {
 status_t SoundTriggerHwService::ModuleClient::loadSoundModel(const sp<IMemory>& modelMemory,
                                 sound_model_handle_t *handle)
 {
-    ALOGV("loadSoundModel() handle");
+    ALOGI("loadSoundModel()");
     if (!captureHotwordAllowed(mOpPackageName,
                                IPCThreadState::self()->getCallingPid(),
                                IPCThreadState::self()->getCallingUid())) {
@@ -987,7 +987,7 @@ status_t SoundTriggerHwService::ModuleClient::loadSoundModel(const sp<IMemory>& 
 
 status_t SoundTriggerHwService::ModuleClient::unloadSoundModel(sound_model_handle_t handle)
 {
-    ALOGV("unloadSoundModel() model handle %d", handle);
+    ALOGI("unloadSoundModel(): model handle = %d", handle);
     if (!captureHotwordAllowed(mOpPackageName,
                                IPCThreadState::self()->getCallingPid(),
                                IPCThreadState::self()->getCallingUid())) {
@@ -1004,7 +1004,7 @@ status_t SoundTriggerHwService::ModuleClient::unloadSoundModel(sound_model_handl
 status_t SoundTriggerHwService::ModuleClient::startRecognition(sound_model_handle_t handle,
                                  const sp<IMemory>& dataMemory)
 {
-    ALOGV("startRecognition() model handle %d", handle);
+    ALOGI("startRecognition(): model handle = %d", handle);
     if (!captureHotwordAllowed(mOpPackageName,
                                IPCThreadState::self()->getCallingPid(),
                                IPCThreadState::self()->getCallingUid())) {
@@ -1023,7 +1023,7 @@ status_t SoundTriggerHwService::ModuleClient::startRecognition(sound_model_handl
 
 status_t SoundTriggerHwService::ModuleClient::stopRecognition(sound_model_handle_t handle)
 {
-    ALOGV("stopRecognition() model handle %d", handle);
+    ALOGI("stopRecognition(): model handle = %d", handle);
     if (!captureHotwordAllowed(mOpPackageName,
                                IPCThreadState::self()->getCallingPid(),
                                IPCThreadState::self()->getCallingUid())) {
@@ -1055,7 +1055,7 @@ status_t SoundTriggerHwService::ModuleClient::getModelState(sound_model_handle_t
 
 void SoundTriggerHwService::ModuleClient::setCaptureState_l(bool active)
 {
-    ALOGV("ModuleClient::setCaptureState_l %d", active);
+    ALOGI("setCaptureState_l(): active = %d", active);
     sp<SoundTriggerHwService> service;
     sound_trigger_service_state_t state;
 
@@ -1078,7 +1078,7 @@ void SoundTriggerHwService::ModuleClient::setCaptureState_l(bool active)
 
 void SoundTriggerHwService::ModuleClient::onCallbackEvent(const sp<CallbackEvent>& event)
 {
-    ALOGV("ModuleClient onCallbackEvent type %d", event->mType);
+    ALOGI("onCallbackEvent(): type %d", event->mType);
 
     sp<IMemory> eventMemory = event->mMemory;
 

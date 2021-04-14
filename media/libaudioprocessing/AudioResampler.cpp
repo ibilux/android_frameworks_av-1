@@ -30,6 +30,9 @@
 #include "AudioResamplerSinc.h"
 #include "AudioResamplerCubic.h"
 #include "AudioResamplerDyn.h"
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+#include "MtkAudioResamplerDyn.h"
+#endif // MTK_AUDIO_FIX_DEFAULT_DEFECT
 
 #ifdef __arm__
     // bug 13102576
@@ -254,6 +257,19 @@ AudioResampler* AudioResampler::create(audio_format_t format, int inChannelCount
             }
         }
         break;
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+    case MTK_DYN_HIGH_QUALITY:
+        ALOGV("Create MTK dynamic Resampler = %d", quality);
+        if (format == AUDIO_FORMAT_PCM_FLOAT) {
+            resampler = new MtkAudioResamplerDyn<float, float, float>(inChannelCount,
+                    sampleRate, quality);
+        } else {
+            LOG_ALWAYS_FATAL_IF(format != AUDIO_FORMAT_PCM_16_BIT);
+            resampler = new MtkAudioResamplerDyn<int32_t, int16_t, int32_t>(inChannelCount,
+                    sampleRate, quality);
+        }
+        break;
+#endif // MTK_AUDIO_FIX_DEFAULT_DEFECT
     }
 
     // initialize resampler

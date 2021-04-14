@@ -28,6 +28,10 @@
 #include <utils/Trace.h>
 #include "FastCapture.h"
 
+#if defined(MTK_LATENCY_DETECT_PULSE)
+#include "AudioDetectPulse.h"
+#endif // MTK_LATENCY_DETECT_PULSE
+
 namespace android {
 
 /*static*/ const FastCaptureState FastCapture::sInitial;
@@ -185,6 +189,15 @@ void FastCapture::onWork()
         ATRACE_BEGIN("read");
         ssize_t framesRead = mInputSource->read(mReadBuffer, frameCount);
         ATRACE_END();
+
+#if defined(MTK_LATENCY_DETECT_PULSE)
+        if (AudioDetectPulse::getDetectPulse()) {
+            AudioDetectPulse::doDetectPulse(TAG_FAST_CATTURE, 800, 0, (void *)mReadBuffer,
+                                            frameCount*Format_frameSize(mFormat),
+                                            mFormat.mFormat, Format_channelCount(mFormat), mSampleRate);
+        }
+#endif  // MTK_LATENCY_DETECT_PULSE
+
         dumpState->mReadSequence++;
         if (framesRead >= 0) {
             LOG_ALWAYS_FATAL_IF((size_t) framesRead > frameCount);

@@ -61,5 +61,7 @@ LOCAL_CFLAGS := -Werror -Wall
 LOCAL_MULTILIB := $(AUDIOSERVER_MULTILIB)
 
 LOCAL_COMPATIBILITY_SUITE := device-tests
+LOCAL_C_INCLUDES += \
+    $(MTK_PATH_SOURCE)/external/audio_utils/common_headers/cgen/cfgfileinc
 
 include $(BUILD_NATIVE_TEST)

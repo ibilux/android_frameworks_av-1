@@ -159,7 +159,8 @@ C2SoftAacEnc::C2SoftAacEnc(
       mInputSize(0),
       mInputTimeUs(0),
       mSignalledError(false),
-      mOutIndex(0u) {
+      mOutIndex(0u),
+      mRemainderLen(0u) {
 }
 
 C2SoftAacEnc::~C2SoftAacEnc() {
@@ -185,6 +186,7 @@ c2_status_t C2SoftAacEnc::onStop() {
     mInputSize = 0u;
     mInputTimeUs = 0;
     mSignalledError = false;
+    mRemainderLen = 0;
     return C2_OK;
 }
 
@@ -369,10 +371,14 @@ void C2SoftAacEnc::process(
         mInputTimeSet = true;
     }
 
-    size_t numFrames = (capacity + mInputSize + (eos ? mNumBytesPerInputFrame - 1 : 0))
+    size_t numFrames =
+        (mRemainderLen + capacity + mInputSize + (eos ? mNumBytesPerInputFrame - 1 : 0))
             / mNumBytesPerInputFrame;
-    ALOGV("capacity = %zu; mInputSize = %zu; numFrames = %zu mNumBytesPerInputFrame = %u",
-          capacity, mInputSize, numFrames, mNumBytesPerInputFrame);
+    ALOGV("capacity = %zu; mInputSize = %zu; numFrames = %zu "
+          "mNumBytesPerInputFrame = %u inputTS = %lld remaining = %zu",
+          capacity, mInputSize, numFrames,
+          mNumBytesPerInputFrame, work->input.ordinal.timestamp.peekll(),
+          mRemainderLen);
 
     std::shared_ptr<C2LinearBlock> block;
     std::shared_ptr<C2Buffer> buffer;
@@ -380,6 +386,7 @@ void C2SoftAacEnc::process(
     uint8_t *outPtr = temp;
     size_t outAvailable = 0u;
     uint64_t inputIndex = work->input.ordinal.frameIndex.peeku();
+    size_t bytesPerSample = channelCount * sizeof(int16_t);
 
     AACENC_InArgs inargs;
     AACENC_OutArgs outargs;
@@ -444,7 +451,25 @@ void C2SoftAacEnc::process(
 
     C2WorkOrdinalStruct outOrdinal = work->input.ordinal;
 
-    while (encoderErr == AACENC_OK && inargs.numInSamples > 0) {
+    if (mRemainderLen > 0) {
+        size_t offset = 0;
+        for (; mRemainderLen < bytesPerSample && offset < capacity; ++offset) {
+            mRemainder[mRemainderLen++] = data[offset];
+        }
+        data += offset;
+        capacity -= offset;
+        if (mRemainderLen == bytesPerSample) {
+            inBuffer[0] = mRemainder;
+            inBufferSize[0] = bytesPerSample;
+            inargs.numInSamples = channelCount;
+            mRemainderLen = 0;
+            ALOGD("Processing remainder");
+        } else {
+            // We have exhausted the input already
+            inargs.numInSamples = 0;
+        }
+    }
+    while (encoderErr == AACENC_OK && inargs.numInSamples >= channelCount) {
         if (numFrames && !block) {
             C2MemoryUsage usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
             // TODO: error handling, proper usage, etc.
@@ -490,7 +515,7 @@ void C2SoftAacEnc::process(
                 mInputTimeUs = work->input.ordinal.timestamp
                         + (consumed * 1000000ll / channelCount / sampleRate);
                 buffer = createLinearBuffer(block, 0, outargs.numOutBytes);
-#if defined(LOG_NDEBUG) && !LOG_NDEBUG
+#if 0
                 hexdump(outPtr, std::min(outargs.numOutBytes, 256));
 #endif
                 outPtr = temp;
@@ -500,7 +525,11 @@ void C2SoftAacEnc::process(
                 mInputSize += outargs.numInSamples * sizeof(int16_t);
             }
 
-            if (outargs.numInSamples > 0) {
+            if (inBuffer[0] == mRemainder) {
+                inBuffer[0] = const_cast<uint8_t *>(data);
+                inBufferSize[0] = capacity;
+                inargs.numInSamples = capacity / sizeof(int16_t);
+            } else if (outargs.numInSamples > 0) {
                 inBuffer[0] = (int16_t *)inBuffer[0] + outargs.numInSamples;
                 inBufferSize[0] -= outargs.numInSamples * sizeof(int16_t);
                 inargs.numInSamples -= outargs.numInSamples;
@@ -540,6 +569,15 @@ void C2SoftAacEnc::process(
                            &outBufDesc,
                            &inargs,
                            &outargs);
+        inBufferSize[0] = 0;
+    }
+
+    if (inBufferSize[0] > 0) {
+        ALOGD("inBufferSize[0] > 0");
+        for (size_t i = 0; i < inBufferSize[0]; ++i) {
+            mRemainder[i] = static_cast<uint8_t *>(inBuffer[0])[i];
+        }
+        mRemainderLen = inBufferSize[0];
     }
 
     outOrdinal.frameIndex = mOutIndex++;

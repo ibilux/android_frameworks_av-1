@@ -77,6 +77,9 @@ protected:
             int64_t timeUs,
             bool *done) = 0;
 
+    virtual status_t extractInternal_ext() = 0;
+    virtual status_t init_ext(
+            int64_t frameTimeUs, size_t numFrames, int option, int colorFormat) = 0;
     sp<MetaData> trackMeta()     const      { return mTrackMeta; }
     OMX_COLOR_FORMATTYPE dstFormat() const  { return mDstFormat; }
     int32_t dstBpp()             const      { return mDstBpp; }
@@ -132,6 +135,14 @@ protected:
             const sp<AMessage> &outputFormat,
             int64_t timeUs,
             bool *done) override;
+    virtual status_t extractInternal_ext() override {
+        return ERROR_UNSUPPORTED;
+    }
+    virtual status_t init_ext(
+        int64_t frameTimeUs __unused,
+        size_t numFrames __unused,
+        int option __unused,
+        int colorFormat __unused) override { return ERROR_UNSUPPORTED;}
 
 private:
     bool mIsAvcOrHevc;
@@ -139,6 +150,7 @@ private:
     int64_t mTargetTimeUs;
     size_t mNumFrames;
     size_t mNumFramesDecoded;
+    bool   mHaveAvcOrHevcIDR;
 };
 
 struct ImageDecoder : public FrameDecoder {
@@ -167,7 +179,14 @@ protected:
             const sp<AMessage> &outputFormat,
             int64_t timeUs,
             bool *done) override;
-
+    virtual status_t extractInternal_ext() override {
+        return ERROR_UNSUPPORTED;
+    }
+    virtual status_t init_ext(
+        int64_t frameTimeUs __unused,
+        size_t numFrames __unused,
+        int option __unused,
+        int colorFormat __unused) override { return ERROR_UNSUPPORTED;}
 private:
     VideoFrame *mFrame;
     int32_t mWidth;

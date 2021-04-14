@@ -74,6 +74,24 @@
 
 #include "TypedLogger.h"
 
+#if defined(MTK_AUDIO_DEBUG)
+#include <media/AudioUtilmtk.h>
+#endif // MTK_AUDIO_DEBUG
+
+// <MTK_AUDIOMIXER_ENABLE_DRC
+#include "AudioCompFltCustParam.h"
+#include "AudioLoudmtk.h"
+// MTK_AUDIOMIXER_ENABLE_DRC>
+
+#include <media/MtkLogger.h>
+
+#if defined(MTK_LATENCY_DETECT_PULSE)
+#include "AudioDetectPulse.h"
+#endif // MTK_LATENCY_DETECT_PULSE
+
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+#include <media/IAudioPolicyService.h>  // ALPS04124128
+#endif
 // ----------------------------------------------------------------------------
 
 // Note: the following macro is used for extremely verbose logging message.  In
@@ -190,6 +208,15 @@ AudioFlinger::AudioFlinger()
     mEffectsFactoryHal = EffectsFactoryHalInterface::create();
 
     mMediaLogNotifier->run("MediaLogNotifier");
+    InitializeMTKLogLevel("vendor.af.audioflinger.log");
+
+#if defined(MTK_LATENCY_DETECT_PULSE)
+    (void) AudioDetectPulse::getInstance();
+#endif // MTK_LATENCY_DETECT_PULSE
+
+// <MTK_AUDIOMIXER_ENABLE_DRC
+    custParamCache = NULL;
+// MTK_AUDIOMIXER_ENABLE_DRC>
 }
 
 void AudioFlinger::onFirstRef()
@@ -247,6 +274,11 @@ AudioFlinger::~AudioFlinger()
             sMediaLogService->unregisterWriter(iMemory);
         }
     }
+// <MTK_AUDIOMIXER_ENABLE_DRC
+    if (custParamCache != NULL) {
+        deleteMtkCustParamCache(custParamCache);
+    }
+// MTK_AUDIOMIXER_ENABLE_DRC>
 }
 
 //static
@@ -811,6 +843,14 @@ sp<IAudioTrack> AudioFlinger::createTrack(const CreateTrackInput& input,
                 }
 
                 size_t frameCount = std::lcm(thread->frameCount(), secondaryThread->frameCount());
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+                //ALPS04681397 double buffer size when lcm of thread's framecount is 1x thread->framecount
+                if (frameCount == thread->frameCount()) {
+                    // use at lease double of source thread frameCount
+                    frameCount = frameCount << 1;
+                }
+                MTK_ALOGV("patch track fameCount %zu", frameCount);
+#endif
 
                 using namespace std::chrono_literals;
                 auto inChannelMask = audio_channel_mask_out_to_in(input.config.channel_mask);
@@ -1134,7 +1174,7 @@ bool AudioFlinger::getMicMute() const
 
 void AudioFlinger::setRecordSilenced(uid_t uid, bool silenced)
 {
-    ALOGV("AudioFlinger::setRecordSilenced(uid:%d, silenced:%d)", uid, silenced);
+    MTK_ALOGD("AudioFlinger::setRecordSilenced(uid:%d, silenced:%d)", uid, silenced);
 
     AutoMutex lock(mLock);
     for (size_t i = 0; i < mRecordThreads.size(); i++) {
@@ -1399,7 +1439,7 @@ void AudioFlinger::logFilteredParameters(size_t originalKVPSize, const String8& 
 
 status_t AudioFlinger::setParameters(audio_io_handle_t ioHandle, const String8& keyValuePairs)
 {
-    ALOGV("setParameters(): io %d, keyvalue %s, calling pid %d calling uid %d",
+    MTK_ALOGV("setParameters(): io %d, keyvalue %s, calling pid %d calling uid %d",
             ioHandle, keyValuePairs.string(),
             IPCThreadState::self()->getCallingPid(), IPCThreadState::self()->getCallingUid());
 
@@ -1407,11 +1447,37 @@ status_t AudioFlinger::setParameters(audio_io_handle_t ioHandle, const String8& 
     if (!settingsAllowed()) {
         return PERMISSION_DENIED;
     }
+#if defined(MTK_AUDIO_DEBUG)
+    {
+        AudioParameter param = AudioParameter(keyValuePairs);
+
+        String8 value_str;
+        int count = AudioDump::PROP_AUDIO_DUMP_MAXNUM;
+        for (int i = 0; i < count; i++) {
+            if (param.get(String8(AudioDump::audioDumpPropertyStr[i]), value_str) == NO_ERROR) {
+                MTK_ALOGV("%s set", AudioDump::audioDumpPropertyStr[i]);
+                property_set(AudioDump::audioDumpPropertyStr[i], value_str);
+                AudioDump::updateKeys(i);
+                return NO_ERROR;
+            }
+        }
+    }
+#endif // MTK_AUDIO_DEBUG
 
     String8 filteredKeyValuePairs = keyValuePairs;
     filterReservedParameters(filteredKeyValuePairs, IPCThreadState::self()->getCallingUid());
 
     ALOGV("%s: filtered keyvalue %s", __func__, filteredKeyValuePairs.string());
+
+#if defined(MTK_LATENCY_DETECT_PULSE)
+    {
+        int value = 0;
+        AudioParameter param = AudioParameter(keyValuePairs);
+        if (param.getInt(String8("DetectPulseEnable"), value) == NO_ERROR) {
+            AudioDetectPulse::setDetectPulse(value ? true : false);
+        }
+    }
+#endif // MTK_LATENCY_DETECT_PULSE
 
     // AUDIO_IO_HANDLE_NONE means the parameters are global to the audio hardware interface
     if (ioHandle == AUDIO_IO_HANDLE_NONE) {
@@ -1451,6 +1517,34 @@ status_t AudioFlinger::setParameters(audio_io_handle_t ioHandle, const String8& 
                 AudioFlinger::mScreenState = ((AudioFlinger::mScreenState & ~1) + 2) | isOff;
             }
         }
+
+        if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+            int intValue;
+            if (param.getInt(String8("UpdateACFHCFParameters"), intValue) == NO_ERROR) {
+                sp<PlaybackThread> thread = primaryPlaybackThread_l();
+                updateDrcParamCache(thread->mCustomScene);
+                for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
+                    sp<PlaybackThread> thread = mPlaybackThreads.valueAt(i);
+                    thread->setParameters(keyValuePairs);
+                }
+            }
+            if (param.getInt(String8("SetBesLoudnessStatus"), intValue) == NO_ERROR) {
+                // ALPS04408933 low latency support drc
+                for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
+                    sp<PlaybackThread> thread = mPlaybackThreads.valueAt(i);
+                    thread->setParameters(keyValuePairs);
+                }
+            }
+            String8 strValue;
+            if (param.get(String8("SetAudioCustomScene"), strValue) == NO_ERROR) {
+                updateDrcParamCache(strValue);
+                for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
+                    sp<PlaybackThread> thread = mPlaybackThreads.valueAt(i);
+                    thread->setParameters(keyValuePairs);
+                 }
+            }
+        } // MTK_AUDIOMIXER_ENABLE_DRC
+
         return final_result;
     }
 
@@ -1489,6 +1583,26 @@ String8 AudioFlinger::getParameters(audio_io_handle_t ioHandle, const String8& k
             ioHandle, keys.string(), IPCThreadState::self()->getCallingPid());
 
     Mutex::Autolock _l(mLock);
+#if defined(MTK_AUDIO_DEBUG)
+    {
+        char value_str[PROPERTY_VALUE_MAX] = {0};
+        int count = AudioDump::PROP_AUDIO_DUMP_MAXNUM;
+        for (int i = 0; i < count; i++) {
+            if (keys.compare(String8(AudioDump::audioDumpPropertyStr[i])) == 0) {
+                property_get(AudioDump::audioDumpPropertyStr[i], value_str, "0");
+                String8 ret = String8::format("%s=%s", AudioDump::audioDumpPropertyStr[i], value_str);
+                return ret;
+            }
+        }
+    }
+#endif // MTK_AUDIO_DEBUG
+
+#if defined(MTK_LATENCY_DETECT_PULSE)
+    if (keys.compare(String8("DetectPulseEnable")) == 0) {
+        String8 ret = AudioDetectPulse::getDetectPulse() ? String8("DetectPulseEnable=1") : String8("DetectPulseEnable=0");
+        return ret;
+    }
+#endif // MTK_LATENCY_DETECT_PULSE
 
     if (ioHandle == AUDIO_IO_HANDLE_NONE) {
         String8 out_s8;
@@ -1914,6 +2028,12 @@ sp<media::IAudioRecord> AudioFlinger::createRecord(const CreateRecordInput& inpu
 
     {
         Mutex::Autolock _l(mLock);
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+         if (lStatus == PERMISSION_DENIED) {
+            ALOGE("createRecord() getInputForattr get PERMISSION_DENIED");
+            goto Exit;
+        }
+#endif
         RecordThread *thread = checkRecordThread_l(output.inputId);
         if (thread == NULL) {
             ALOGE("createRecord() checkRecordThread_l failed, input handle %d", output.inputId);
@@ -1933,7 +2053,8 @@ sp<media::IAudioRecord> AudioFlinger::createRecord(const CreateRecordInput& inpu
                                                   &output.notificationFrameCount,
                                                   callingPid, clientUid, &output.flags,
                                                   input.clientInfo.clientTid,
-                                                  &lStatus, portId);
+                                                  &lStatus, portId,
+                                                  input.opPackageName);
         LOG_ALWAYS_FATAL_IF((lStatus == NO_ERROR) && (recordTrack == 0));
 
         // lStatus == BAD_TYPE means FAST flag was rejected: request a new input from
@@ -2383,6 +2504,10 @@ status_t AudioFlinger::openOutput(audio_module_handle_t module,
         return BAD_VALUE;
     }
 
+#if defined(MTK_AUDIO)
+        FeatureOption::getValues();
+#endif
+
     Mutex::Autolock _l(mLock);
 
     sp<ThreadBase> thread = openOutput_l(module, output, config, *devices, address, flags);
@@ -2404,6 +2529,26 @@ status_t AudioFlinger::openOutput(audio_module_handle_t module,
                 mPrimaryHardwareDev->hwDevice()->setMode(mMode);
                 mHardwareStatus = AUDIO_HW_IDLE;
             }
+
+            // ALPS04408933 low latency support drc
+            if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+                String8 s;
+                int value;
+                status_t result;
+
+                AutoMutex lock(mHardwareLock);
+                sp<DeviceHalInterface> dev = playbackThread->getOutput()->audioHwDev->hwDevice();
+                result = dev->getParameters(String8("GetBesLoudnessStatus"), &s);
+                mHardwareLock.unlock();
+
+                if (result == OK) {
+                    AudioParameter param = AudioParameter(s);
+                    if (param.getInt(String8("GetBesLoudnessStatus"), value) == NO_ERROR) {
+                        playbackThread->setParameters(String8::format("SetBesLoudnessStatus=%d",value));
+                    }
+                }
+                updateDrcParamCache();
+            } // MTK_AUDIOMIXER_ENABLE_DRC
         } else {
             MmapThread *mmapThread = (MmapThread *)thread.get();
             mmapThread->ioConfigChanged(AUDIO_OUTPUT_OPENED);
@@ -2428,8 +2573,19 @@ audio_io_handle_t AudioFlinger::openDuplicateOutput(audio_io_handle_t output1,
     }
 
     audio_io_handle_t id = nextUniqueId(AUDIO_UNIQUE_ID_USE_OUTPUT);
+
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+    uint32_t latencyThread1 = thread1->latency();
+    uint32_t latencyThread2 = thread2->latency();
+    uint32_t latencyMs = latencyThread1 > latencyThread2 ? latencyThread1 : latencyThread2;
+
+    DuplicatingThread *thread = new DuplicatingThread(this, thread1, id, mSystemReady, latencyMs);
+    thread->addOutputTrack(thread2, latencyMs);
+#else
     DuplicatingThread *thread = new DuplicatingThread(this, thread1, id, mSystemReady);
     thread->addOutputTrack(thread2);
+#endif
+
     mPlaybackThreads.add(id, thread);
     // notify client processes of the new output creation
     thread->ioConfigChanged(AUDIO_OUTPUT_OPENED);
@@ -3022,7 +3178,13 @@ AudioFlinger::MmapThread *AudioFlinger::checkMmapThread_l(audio_io_handle_t io) 
 // checkPlaybackThread_l() must be called with AudioFlinger::mLock held
 AudioFlinger::VolumeInterface *AudioFlinger::getVolumeInterface_l(audio_io_handle_t output) const
 {
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+    VolumeInterface *volumeInterface;
+    volumeInterface = (mPlaybackThreads.indexOfKey(output) >= 0) ? mPlaybackThreads.valueFor(output).get() : nullptr;
+#else
     VolumeInterface *volumeInterface = mPlaybackThreads.valueFor(output).get();
+#endif
+
     if (volumeInterface == nullptr) {
         MmapThread *mmapThread = mMmapThreads.valueFor(output).get();
         if (mmapThread != nullptr) {
@@ -3355,6 +3517,14 @@ sp<IEffect> AudioFlinger::createEffect(
             io = AudioSystem::getOutputForEffect(&desc);
             ALOGV("createEffect got output %d", io);
         }
+
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+        // ALPS04124128: must ensure media.audio_policy service is ready
+        const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
+        if (aps == 0) {
+            ALOGW("Get media.audio_policy service fail!");
+        }
+#endif
 
         Mutex::Autolock _l(mLock);
 
@@ -3721,5 +3891,39 @@ status_t AudioFlinger::onTransact(
 {
     return BnAudioFlinger::onTransact(code, data, reply, flags);
 }
+
+// <MTK_AUDIOMIXER_ENABLE_DRC
+void AudioFlinger::updateDrcParamCache(const String8& customScene)
+{
+    if (!FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        return;
+    }
+
+    String8 s;
+    status_t result;
+
+    sp<DeviceHalInterface> dev = mPrimaryHardwareDev->hwDevice();
+    String8 drc_music_cmd = String8("MTK_BESLOUDNESS_MUSIC_PARAM");
+    String8 encode_drc_music_param;
+    String8 drc_ringtone_cmd = String8("MTK_BESLOUDNESS_RINGTONE_PARAM");
+    String8 encode_ringtone_music_param;
+
+    AutoMutex lock(mHardwareLock);
+    mHardwareStatus = AUDIO_HW_GET_PARAMETER;
+    result = dev->getParameters(drc_music_cmd, &s);
+    mHardwareStatus = AUDIO_HW_IDLE;
+    encode_drc_music_param.appendFormat("%s", s.string() + (drc_music_cmd.size() + 1));
+    if (custParamCache ==  NULL) {
+        custParamCache = newMtkAudioCustParamCache();
+    }
+    custParamCache->saveEncodedParameter(AUDIO_COMP_FLT_DRC_FOR_MUSIC, encode_drc_music_param, customScene.string());
+
+    mHardwareStatus = AUDIO_HW_GET_PARAMETER;
+    result = dev->getParameters(drc_ringtone_cmd, &s);
+    mHardwareStatus = AUDIO_HW_IDLE;
+    encode_ringtone_music_param.appendFormat("%s", s.string() + (drc_ringtone_cmd.size() + 1));
+    custParamCache->saveEncodedParameter(AUDIO_COMP_FLT_DRC_FOR_RINGTONE, encode_ringtone_music_param, customScene.string());
+}
+// MTK_AUDIOMIXER_ENABLE_DRC>
 
 } // namespace android

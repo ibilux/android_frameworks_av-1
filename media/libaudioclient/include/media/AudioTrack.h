@@ -1246,6 +1246,17 @@ private:
     };
     MediaMetrics mMediaMetrics;
 };
+// <MTK_AUDIO
+class AudioTrackDump
+{
+public:
+    static void dump(const char *path, void *buffer, int count, const char *property);
+private:
+    static int checkPath(const char *path);
+    AudioTrackDump(AudioTrackDump &);
+    AudioTrackDump & operator = (AudioTrackDump&);
+};
+// MTK_AUDIO>
 
 }; // namespace android
 

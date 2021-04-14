@@ -44,6 +44,7 @@ class IMediaMetadataRetriever;
 class IRemoteDisplay;
 class IRemoteDisplayClient;
 class MediaRecorderClient;
+struct RemoteDisplay;
 
 #define CALLBACK_ANTAGONIZER 0
 #if CALLBACK_ANTAGONIZER
@@ -492,6 +493,12 @@ private:
                 SortedVector< wp<Client> >  mClients;
                 SortedVector< wp<MediaRecorderClient> > mMediaRecorderClients;
                 int32_t                     mNextConnId;
+
+public:
+    virtual status_t            enableRemoteDisplay(const char *iface);
+    virtual status_t            enableRemoteDisplay(const char *iface, const uint32_t wfdFlags);
+private:
+    sp<RemoteDisplay>           mRemoteDisplay;
 };
 
 // ----------------------------------------------------------------------------

@@ -307,6 +307,27 @@ private:
 
     MPEG4Writer(const MPEG4Writer &);
     MPEG4Writer &operator=(const MPEG4Writer &);
+
+// add for mtk
+protected:
+    bool mHasVideoTrack = false;
+    bool mHasAudioTrack = false;
+
+    // add common interfaces
+    virtual void        init() {}
+    virtual void        initStart(MetaData * /*param*/) {}
+    // add notify file size to app for mms
+    virtual void        notifyEstimateSize(int64_t /*nTotalBytesEstimate*/) {}
+
+    // for EIS
+    virtual void        setEISStop() { }
+    virtual bool        getEISStop() { return false; }
+    virtual void        setAudioTrackDurationUs(int64_t /*timeUs*/) {}
+    virtual void        setVideoTrackDurationUs(int64_t /*timeUs*/) {}
+    virtual int64_t     getAudioTrackDurationUs() { return 0; }
+    virtual int64_t     getVideoTrackDurationUs() { return 0; }
+    virtual int64_t     getEISStopWaitTime() { return 0; }
+// end of add for mtk
 };
 
 }  // namespace android

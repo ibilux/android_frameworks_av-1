@@ -26,6 +26,11 @@
 #include "client/AudioStreamInternalPlay.h"
 #include "utility/AudioClock.h"
 
+#if defined(MTK_AUDIO_DEBUG)
+#include <string.h>
+#include <media/AudioUtilmtk.h>
+#endif
+
 using android::WrappingBuffer;
 
 using namespace aaudio;
@@ -225,6 +230,20 @@ aaudio_result_t AudioStreamInternalPlay::writeNowWithConversion(const void *buff
             }
 
             int32_t numBytes = getBytesPerFrame() * framesToWrite;
+
+#if defined(MTK_AUDIO_DEBUG)
+            {
+                using namespace android;
+                if (AudioDump::getProperty(AudioDump::PROP_AUDIO_DUMP_AAUDIO)) {
+                    String8 fileName = String8::format("%s_pid%d_tid%d.pcm",
+                                                       AudioDump::aaudio_exclusive_dl,
+                                                       getpid(), gettid());
+                    AudioDump::threadDump(fileName, byteBuffer, numBytes,
+                               AAudioConvert_aaudioToAndroidDataFormat(getFormat()),
+                               getSampleRate(), getSamplesPerFrame());
+                }
+            }
+#endif
 
             mFlowGraph.process((void *)byteBuffer,
                                wrappingBuffer.data[partIndex],

@@ -101,7 +101,10 @@ extern "C" {
 #define LVM_CS_MAX_REVERB_LEVEL         100       /*CS Maximum Reverb Level*/
 #define LVM_VIRTUALIZER_MAX_REVERB_LEVEL 100      /*Vitrualizer Maximum Reverb Level*/
 
-#define LVM_VC_MIXER_TIME              100       /*VC mixer time*/
+//<MTK_AUDIO_FIX_DEFAULT_DEFECT
+// android default is 100
+#define LVM_VC_MIXER_TIME              10        /*VC mixer time*/
+//MTK_AUDIO_FIX_DEFAULT_DEFECT>
 #define LVM_VC_BALANCE_MAX             96        /*VC balance max value*/
 #define LVM_VC_BALANCE_MIN             (-96)     /*VC balance min value*/
 

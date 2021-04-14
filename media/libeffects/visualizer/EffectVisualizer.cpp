@@ -441,9 +441,21 @@ int Visualizer_process(
             smp += inBuffer->f32[inIdx++];
         }
         buf[captIdx] = clamp8_from_float(smp * fscale);
+        //if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+            if (128 == buf[captIdx] && 0.f != smp) {
+                buf[captIdx] = ((uint8_t)1)^0x80;
+            }
+        //} //MTK_AUDIOMIXER_ENABLE_DRC
 #else
         const int32_t smp = (inBuffer->s16[inIdx] + inBuffer->s16[inIdx + 1]) >> shift;
         inIdx += FCC_2;  // integer supports stereo only.
+        //if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+            const int32_t temp = (inBuffer->s16[inIdx] + inBuffer->s16[inIdx + 1]);
+            if (0 == smp && 0 != temp) {
+                smp = 1;
+            }
+            //smp = 1; // forced pass gapless test
+        //} //MTK_AUDIOMIXER_ENABLE_DRC
         buf[captIdx] = ((uint8_t)smp)^0x80;
 #endif // BUILD_FLOAT
     }

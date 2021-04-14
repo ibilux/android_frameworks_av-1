@@ -26,6 +26,16 @@ cc_defaults {
         // uncomment to disable NEON on architectures that actually do support NEON, for benchmarking
         // "-DUSE_NEON=false",
     ],
+
+    include_dirs: [
+        "frameworks/av/media/libaudioprocessing/audio-util",
+        "vendor/mediatek/proprietary/external/bessound_HD",
+        "vendor/mediatek/proprietary/external/AudioCompensationFilter",
+        "vendor/mediatek/proprietary/external/AudioComponentEngine",
+        "vendor/mediatek/proprietary/external/audio_utils/common_headers/cgen/cfgfileinc",
+    ],
+
+    defaults: ["mtk_libaudioprocessing_defaults"],
 }
 
 cc_library_shared {
@@ -57,3 +67,45 @@ cc_library_static {
         },
     },
 }
+
+bootstrap_go_package {
+    name:"soong-libaudioprocessing-mediatek",
+    pkgPath:"android/soong/libaudioprocessing/mediatek",
+    deps:[
+        "soong-android",
+        "soong-cc",
+    ],
+    srcs:[
+        "libaudioprocessing.go",
+    ],
+    pluginFor:["soong_build"],
+}
+
+// <MTK_AUDIO
+mtk_libaudioprocessing_defaults {
+    name: "mtk_libaudioprocessing_defaults",
+
+    srcs: [
+        "MtkAudioResamplerDyn.cpp",
+    ],
+
+    shared_libs: [
+        "libmedia_helper",
+        "libaudioutilmtk",
+    ],
+
+    product_variables: {
+        debuggable: {
+            cflags: [
+                "-DCONFIG_MT_USERDEBUG_BUILD",
+            ],
+        },
+        eng: {
+            cflags: [
+                "-UCONFIG_MT_USERDEBUG_BUILD",
+                "-DCONFIG_MT_ENG_BUILD",
+            ],
+        },
+    },
+}
+// MTK_AUDIO>

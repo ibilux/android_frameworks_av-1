@@ -38,6 +38,18 @@
 
 #include "AudioMixerOps.h"
 
+#if defined(MTK_AUDIO_DEBUG)
+#include <media/AudioUtilmtk.h>
+#include <utils/String8.h>
+#endif // MTK_AUDIO_DEBUG
+#include <media/MtkLogger.h>
+
+// <MTK_AUDIOMIXER_ENABLE_DRC
+#include "AudioCompFltCustParam.h"
+#include "AudioLoudmtk.h"
+#include "BesLoudness_HD_exp.h"
+// MTK_AUDIOMIXER_ENABLE_DRC>
+
 // The FCC_2 macro refers to the Fixed Channel Count of 2 for the legacy integer mixer.
 #ifndef FCC_2
 #define FCC_2 2
@@ -80,20 +92,48 @@ using TYPE_AUX = int32_t; // q4.27
 #endif
 
 // Set to default copy buffer size in frames for input processing.
-static const size_t kCopyBufferFrameCount = 256;
+//static const size_t kCopyBufferFrameCount = 256
+// <MTK_AUDIOMIXER_ENABLE_DRC
+static size_t kCopyBufferFrameCount;
+// MTK_AUDIOMIXER_ENABLE_DRC>
 
 namespace android {
 
+// ----------------------------------------------------------------------------
+// <MTK_AUDIOMIXER_ENABLE_DRC
+static inline int32_t clamp4_27(int32_t sample);
+// MTK_AUDIOMIXER_ENABLE_DRC>
 // ----------------------------------------------------------------------------
 
 static inline audio_format_t selectMixerInFormat(audio_format_t inputFormat __unused) {
     return kUseFloat && kUseNewMixer ? AUDIO_FORMAT_PCM_FLOAT : AUDIO_FORMAT_PCM_16_BIT;
 }
 
+// <MTK_AUDIOMIXER_ENABLE_DRC
+AudioMixer::~AudioMixer()
+{
+    if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        for (const auto &pair : mTracks) {
+            const std::shared_ptr<Track> &t = pair.second;
+            if (t->mpDRCObj) {
+                t->mpDRCObj->close();
+                delete t->mpDRCObj;
+                t->mpDRCObj = NULL;
+            }
+        }
+    }
+}
+// MTK_AUDIOMIXER_ENABLE_DRC>
+
 status_t AudioMixer::create(
         int name, audio_channel_mask_t channelMask, audio_format_t format, int sessionId)
 {
     LOG_ALWAYS_FATAL_IF(exists(name), "name %d already exists", name);
+    InitializeMTKLogLevel("vendor.af.audioflinger.log");
+
+// <MTK_AUDIOMIXER_ENABLE_DRC
+    kCopyBufferFrameCount = (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) ? (512 * 4) : 256;
+// MTK_AUDIOMIXER_ENABLE_DRC>
 
     if (!isValidChannelMask(channelMask)) {
         ALOGE("%s invalid channelMask: %#x", __func__, channelMask);
@@ -133,6 +173,12 @@ status_t AudioMixer::create(
         t->mAuxLevel = 0.;
         t->mAuxInc = 0.;
         t->mPrevAuxLevel = 0.;
+
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03762573 : first volume control
+        t->mPreVolumeValid[0] = false;
+        t->mPreVolumeValid[1] = false;
+        t->mPreAuxValid = false;
+#endif
 
         // no initialization needed
         // t->frameCount
@@ -175,6 +221,16 @@ status_t AudioMixer::create(
         t->mAdjustNonDestructiveInChannelCount = t->mAdjustOutChannelCount;
         t->mAdjustNonDestructiveOutChannelCount = t->channelCount;
         t->mKeepContractedChannels = false;
+// <MTK_AUDIOMIXER_ENABLE_DRC
+        t->mDRCEnable = false;
+        t->mpDRCObj = NULL;
+        t->mStreamType = AUDIO_STREAM_DEFAULT;
+        t->mFlags = AUDIO_OUTPUT_FLAG_NONE; // ALPS04408933 low latency support drc
+        t->mDevSampleRate = mSampleRate;
+        t->mDRCTempBuffer = mDRCTempBuffer.get(); // naked ptr
+        t->mCustomScene = (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) ? mSetCustomScene : String8("");
+// MTK_AUDIOMIXER_ENABLE_DRC>
+
         // Check the downmixing (or upmixing) requirements.
         status_t status = t->prepareForDownmix();
         if (status != OK) {
@@ -186,6 +242,9 @@ status_t AudioMixer::create(
         t->prepareForReformat();
         t->prepareForAdjustChannelsNonDestructive(mFrameCount);
         t->prepareForAdjustChannels();
+// <MTK_AUDIO_DEBUG
+        t->mDevSampleRate = mSampleRate;
+// MTK_AUDIO_DEBUG>
 
         mTracks[name] = t;
         return OK;
@@ -480,7 +539,18 @@ void AudioMixer::Track::reconfigureBufferProviders()
 void AudioMixer::destroy(int name)
 {
     LOG_ALWAYS_FATAL_IF(!exists(name), "invalid name: %d", name);
-    ALOGV("deleteTrackName(%d)", name);
+    MTK_ALOGV("deleteTrackName(%d)", name);
+
+    if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        const std::shared_ptr<Track> &track = mTracks[name];
+        track->mDRCEnable = false;
+        track->mCustomScene = String8("");
+        if (track->mpDRCObj) {
+            track->mpDRCObj->close();
+            delete track->mpDRCObj;
+            track->mpDRCObj = NULL;
+        }
+    } // MTK_AUDIOMIXER_ENABLE_DRC
 
     if (mTracks[name]->enabled) {
         invalidate();
@@ -539,13 +609,20 @@ void AudioMixer::disable(int name)
  */
 static inline bool setVolumeRampVariables(float newVolume, int32_t ramp,
         int16_t *pIntSetVolume, int32_t *pIntPrevVolume, int32_t *pIntVolumeInc,
-        float *pSetVolume, float *pPrevVolume, float *pVolumeInc) {
+        float *pSetVolume, float *pPrevVolume, float *pVolumeInc
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03762573 : first volume control
+        ,bool *pPreVolumeValid
+#endif
+        ) {
     // check floating point volume to see if it is identical to the previously
     // set volume.
     // We do not use a tolerance here (and reject changes too small)
     // as it may be confusing to use a different value than the one set.
     // If the resulting volume is too small to ramp, it is a direct set of the volume.
     if (newVolume == *pSetVolume) {
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03762573 : first volume control
+        *pPreVolumeValid = true;
+#endif
         return false;
     }
     if (newVolume < 0) {
@@ -580,7 +657,11 @@ static inline bool setVolumeRampVariables(float newVolume, int32_t ramp,
     }
 
     // set floating point volume ramp
-    if (ramp != 0) {
+    if (ramp != 0
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03762573 : first volume control
+        && *pPreVolumeValid
+#endif
+    ) {
         // when the ramp completes, *pPrevVolume is set to *pSetVolume, so there
         // is no computational mismatch; hence equality is checked here.
         ALOGD_IF(*pPrevVolume != *pSetVolume, "previous float ramp hasn't finished,"
@@ -611,7 +692,11 @@ static inline bool setVolumeRampVariables(float newVolume, int32_t ramp,
             AudioMixer::UNITY_GAIN_INT : (int32_t)scaledVolume;
 
     // set integer volume ramp
-    if (ramp != 0) {
+    if (ramp != 0
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03762573 : first volume control
+        && *pPreVolumeValid
+#endif
+    ) {
         // integer volume is U4.12 (to use 16 bit multiplies), but ramping uses U4.28.
         // when the ramp completes, *pIntPrevVolume is set to *pIntSetVolume << 16, so there
         // is no computational mismatch; hence equality is checked here.
@@ -627,11 +712,18 @@ static inline bool setVolumeRampVariables(float newVolume, int32_t ramp,
     }
 
     // if no ramp, or ramp not allowed, then clear float and integer increments
-    if (ramp == 0) {
+    if (ramp == 0
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03762573 : first volume control
+        || !(*pPreVolumeValid)
+#endif
+    ) {
         *pVolumeInc = 0;
         *pPrevVolume = newVolume;
         *pIntVolumeInc = 0;
         *pIntPrevVolume = intVolume << 16;
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03762573 : first volume control
+        *pPreVolumeValid = true;
+#endif
     }
     *pSetVolume = newVolume;
     *pIntSetVolume = intVolume;
@@ -724,6 +816,14 @@ void AudioMixer::setParameter(int name, int target, int param, void *value)
                 track->mHapticIntensity = hapticIntensity;
             }
             } break;
+// <MTK_AUDIOMIXER_ENABLE_DRC
+        case STREAM_TYPE:
+            track->mStreamType = (audio_stream_type_t)valueInt;
+            break;
+        case FLAGS: // ALPS04408933 low latency support drc
+            track->mFlags = (audio_output_flags_t)valueInt;
+            break;
+// MTK_AUDIOMIXER_ENABLE_DRC>
         default:
             LOG_ALWAYS_FATAL("setParameter track: bad param %d", param);
         }
@@ -734,7 +834,7 @@ void AudioMixer::setParameter(int name, int target, int param, void *value)
         case SAMPLE_RATE:
             ALOG_ASSERT(valueInt > 0, "bad sample rate %d", valueInt);
             if (track->setResampler(uint32_t(valueInt), mSampleRate)) {
-                ALOGV("setParameter(RESAMPLE, SAMPLE_RATE, %u)",
+                MTK_ALOGV("setParameter(RESAMPLE, SAMPLE_RATE, %u)",
                         uint32_t(valueInt));
                 invalidate();
             }
@@ -760,7 +860,12 @@ void AudioMixer::setParameter(int name, int target, int param, void *value)
             if (setVolumeRampVariables(*reinterpret_cast<float*>(value),
                     target == RAMP_VOLUME ? mFrameCount : 0,
                     &track->auxLevel, &track->prevAuxLevel, &track->auxInc,
-                    &track->mAuxLevel, &track->mPrevAuxLevel, &track->mAuxInc)) {
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03762573 : first volume control
+                    &track->mAuxLevel, &track->mPrevAuxLevel, &track->mAuxInc, &track->mPreAuxValid))
+#else
+                    &track->mAuxLevel, &track->mPrevAuxLevel, &track->mAuxInc))
+#endif
+            {
                 ALOGV("setParameter(%s, AUXLEVEL: %04x)",
                         target == VOLUME ? "VOLUME" : "RAMP_VOLUME", track->auxLevel);
                 invalidate();
@@ -775,9 +880,14 @@ void AudioMixer::setParameter(int name, int target, int param, void *value)
                         &track->volumeInc[param - VOLUME0],
                         &track->mVolume[param - VOLUME0],
                         &track->mPrevVolume[param - VOLUME0],
-                        &track->mVolumeInc[param - VOLUME0])) {
-                    ALOGV("setParameter(%s, VOLUME%d: %04x)",
-                            target == VOLUME ? "VOLUME" : "RAMP_VOLUME", param - VOLUME0,
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03762573 : first volume control
+                        &track->mVolumeInc[param - VOLUME0], &track->mPreVolumeValid[param - VOLUME0]))
+#else
+                        &track->mVolumeInc[param - VOLUME0]))
+#endif
+                {
+                    MTK_ALOGV("setParameter(%s, VOLUME%d: %04x)",
+                    target == VOLUME ? "VOLUME" : "RAMP_VOLUME", param - VOLUME0,
                                     track->volume[param - VOLUME0]);
                     invalidate();
                 }
@@ -809,6 +919,36 @@ void AudioMixer::setParameter(int name, int target, int param, void *value)
             }
             break;
 
+// <MTK_AUDIOMIXER_ENABLE_DRC
+        case DRC:
+            switch (param) {
+            case DEVICE:
+                track->setDRCHandler(valueInt, mSampleRate);
+                break;
+            case UPDATE_ACFHCF:
+                for (const auto &pair : mTracks) {
+                    const std::shared_ptr<Track> &t = pair.second;
+                    t->updateDRCParam(mSampleRate);
+                }
+                break;
+            case UPDATE_SCENE: {
+                mSetCustomScene = (String8)(char *)value;
+                for (const auto &pair : mTracks) {
+                    const std::shared_ptr<Track> &t = pair.second;
+                    if (t->mCustomScene != mSetCustomScene) {
+                        t->mCustomScene = mSetCustomScene;
+                        t->updateDRCParam(mSampleRate);
+                    }
+                }
+            } break;
+            case RESET:
+                track->resetDRC();
+                break;
+            default:
+                LOG_FATAL("bad param");
+            }
+            break;
+// MTK_AUDIOMIXER_ENABLE_DRC>
     default:
         LOG_ALWAYS_FATAL("setParameter: bad target %d", target);
     }
@@ -816,6 +956,9 @@ void AudioMixer::setParameter(int name, int target, int param, void *value)
 
 bool AudioMixer::Track::setResampler(uint32_t trackSampleRate, uint32_t devSampleRate)
 {
+#if defined(MTK_AUDIO_DEBUG)
+    mDevSampleRate = devSampleRate;
+#endif
     if (trackSampleRate != devSampleRate || mResampler.get() != nullptr) {
         if (sampleRate != trackSampleRate) {
             sampleRate = trackSampleRate;
@@ -832,6 +975,9 @@ bool AudioMixer::Track::setResampler(uint32_t trackSampleRate, uint32_t devSampl
                 } else {
                     quality = AudioResampler::DYN_LOW_QUALITY;
                 }
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+                quality = AudioResampler::MTK_DYN_HIGH_QUALITY; // Fixed to high quality
+#endif // MTK_AUDIO_FIX_DEFAULT_DEFECT
 
                 // TODO: Remove MONO_HACK. Resampler sees #channels after the downmixer
                 // but if none exists, it is the channel count (1 for mono).
@@ -1043,6 +1189,10 @@ void AudioMixer::process__validate()
                 }
             }
         }
+        if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+            resampling = true;
+            all16BitsStereoNoResample = false;
+        } // MTK_AUDIOMIXER_ENABLE_DRC
     }
 
     // select the processing hooks
@@ -1056,7 +1206,7 @@ void AudioMixer::process__validate()
                 mResampleTemp.reset(new int32_t[MAX_NUM_CHANNELS * mFrameCount]);
             }
             mHook = &AudioMixer::process__genericResampling;
-        } else {
+        } else if (!FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
             // we keep temp arrays around.
             mHook = &AudioMixer::process__genericNoResampling;
             if (all16BitsStereoNoResample && !volumeRamp) {
@@ -1098,7 +1248,8 @@ void AudioMixer::process__validate()
         }
         if (allMuted) {
             mHook = &AudioMixer::process__nop;
-        } else if (all16BitsStereoNoResample) {
+        } else if (all16BitsStereoNoResample && !FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+            // Use MTK_AUDIOMIXER_ENABLE_DRC will not enter here
             if (mEnabled.size() == 1) {
                 //const int i = 31 - __builtin_clz(enabledTracks);
                 const std::shared_ptr<Track> &t = mTracks[mEnabled[0]];
@@ -1496,6 +1647,16 @@ void AudioMixer::process__genericNoResampling()
             const std::shared_ptr<Track> &t1 = mTracks[group[0]];
             convertMixerFormat(out, t1->mMixerFormat, outTemp, t1->mMixerInFormat,
                     frameCount * t1->mMixerChannelCount);
+#if defined(MTK_AUDIO_DEBUG)
+            if (AudioDump::getProperty(AudioDump::PROP_AUDIO_DUMP_MIXEREND)) {
+                String8 fileName = String8::format("%s_pid%d_tid%d.pcm", AudioDump::af_mixer_end_pcm,
+                    getpid(), gettid());
+                AudioDump::threadDump(fileName, out,
+                    BLOCKSIZE * t1->mMixerChannelCount * audio_bytes_per_sample(t1->mMixerFormat),
+                    t1->mMixerFormat, t1->sampleRate, t1->mMixerChannelCount);
+            }
+#endif // MTK_AUDIO_DEBUG
+
             // TODO: fix ugly casting due to choice of out pointer type
             out = reinterpret_cast<int32_t*>((uint8_t*)out
                     + frameCount * t1->mMixerChannelCount
@@ -1540,6 +1701,22 @@ void AudioMixer::process__genericResampling()
 
                 size_t outFrames = 0;
 
+// <MTK_AUDIOMIXER_ENABLE_DRC
+                int32_t * ptempBuffer = 0;
+                int8_t *tempBuffer = 0;
+                int channelCount = 0;
+                int32_t channelSize = 0;
+                int32_t sampleSize = 0;
+
+                if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+                    ptempBuffer = mNonResampleTemp.get(); // naked ptr
+                    tempBuffer = (int8_t *)ptempBuffer;
+                    channelCount = ((1 == t->channelCount) && (2 == t->mMixerChannelCount)) ? 1 : t->mMixerChannelCount;
+                    channelSize = channelCount * audio_bytes_per_sample(t->mMixerInFormat);
+                    memset(tempBuffer, 0, numFrames * channelSize);
+                }
+// MTK_AUDIOMIXER_ENABLE_DRC>
+
                 while (outFrames < numFrames) {
                     t->buffer.frameCount = numFrames - outFrames;
                     t->bufferProvider->getNextBuffer(&t->buffer);
@@ -1548,18 +1725,47 @@ void AudioMixer::process__genericResampling()
                     // been enabled for mixing.
                     if (t->mIn == nullptr) break;
 
-                    (t.get()->*t->hook)(
-                            outTemp + outFrames * t->mMixerChannelCount, t->buffer.frameCount,
-                            mResampleTemp.get() /* naked ptr */,
-                            aux != nullptr ? aux + outFrames : nullptr);
+// <MTK_AUDIOMIXER_ENABLE_DRC
+                    if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+                        sampleSize = t->buffer.frameCount * channelSize;
+                        memcpy(tempBuffer+ outFrames * channelSize, t->mIn, sampleSize);
+                    } else {
+// MTK_AUDIOMIXER_ENABLE_DRC>
+                        (t.get()->*t->hook)(
+                                outTemp + outFrames * t->mMixerChannelCount, t->buffer.frameCount,
+                                mResampleTemp.get() /* naked ptr */,
+                                aux != nullptr ? aux + outFrames : nullptr);
+// <MTK_AUDIOMIXER_ENABLE_DRC
+                    }
+// MTK_AUDIOMIXER_ENABLE_DRC>
                     outFrames += t->buffer.frameCount;
 
                     t->bufferProvider->releaseBuffer(&t->buffer);
                 }
+
+                if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+                    (t.get()->*t->hook)(
+                                outTemp, numFrames,
+                                mNonResampleTemp.get() /* naked ptr */,
+                                aux != nullptr ? aux : nullptr);
+                    if (CC_UNLIKELY(aux != NULL)) {
+                        aux += numFrames;
+                    }
+                } // MTK_AUDIOMIXER_ENABLE_DRC
             }
         }
         convertMixerFormat(t1->mainBuffer, t1->mMixerFormat,
                 outTemp, t1->mMixerInFormat, numFrames * t1->mMixerChannelCount);
+
+#if defined(MTK_AUDIO_DEBUG)
+        if (AudioDump::getProperty(AudioDump::PROP_AUDIO_DUMP_MIXEREND)) {
+            String8 fileName = String8::format("%s_pid%d_tid%d.pcm", AudioDump::af_mixer_end_pcm,
+                getpid(), gettid());
+            AudioDump::threadDump(fileName, t1->mainBuffer,
+                numFrames * t1->mMixerChannelCount * audio_bytes_per_sample(t1->mMixerFormat),
+                t1->mMixerFormat, t1->mDevSampleRate, t1->mMixerChannelCount);
+        }
+#endif // MTK_AUDIO_DEBUG
     }
 }
 
@@ -1838,6 +2044,15 @@ void AudioMixer::process__noResampleOneTrack()
         const size_t outFrames = b.frameCount;
         t->volumeMix<MIXTYPE, is_same<TI, float>::value /* USEFLOATVOL */, false /* ADJUSTVOL */> (
                 out, outFrames, in, aux, ramp);
+#if defined(MTK_AUDIO_DEBUG)
+        if (AudioDump::getProperty(AudioDump::PROP_AUDIO_DUMP_MIXEREND)) {
+            String8 fileName = String8::format("%s_pid%d_tid%d.pcm", AudioDump::af_mixer_end_pcm,
+                getpid(), gettid());
+            AudioDump::threadDump(fileName, out,
+                outFrames * t->mMixerChannelCount * audio_bytes_per_sample(t->mMixerFormat),
+                t->mMixerFormat, t->sampleRate, t->mMixerChannelCount);
+        }
+#endif // MTK_AUDIO_DEBUG
 
         out += outFrames * channels;
         if (aux != NULL) {
@@ -1901,7 +2116,7 @@ void AudioMixer::Track::track__Resample(TO* out, size_t outFrameCount, TO* temp,
     ALOGVV("track__Resample\n");
     mResampler->setSampleRate(sampleRate);
     const bool ramp = needsRamp();
-    if (ramp || aux != NULL) {
+    if ((ramp || aux != NULL) || FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
         // if ramp:        resample with unity gain to temp buffer and scale/mix in 2nd step.
         // if aux != NULL: resample with unity gain to temp buffer then apply send level.
 
@@ -1909,13 +2124,20 @@ void AudioMixer::Track::track__Resample(TO* out, size_t outFrameCount, TO* temp,
         memset(temp, 0, outFrameCount * mMixerChannelCount * sizeof(TO));
         mResampler->resample((int32_t*)temp, outFrameCount, bufferProvider);
 
+        if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+            volumeClamp(outFrameCount, &temp, true);
+            doPostProcessing<MIXTYPE>(temp, (AUDIO_FORMAT_PCM_16_BIT == mMixerInFormat
+               ? AUDIO_FORMAT_PCM_32_BIT : mMixerInFormat), outFrameCount);
+            volumeClamp(outFrameCount, &temp, false);
+        } // MTK_AUDIOMIXER_ENABLE_DRC
+
         volumeMix<MIXTYPE, is_same<TI, float>::value /* USEFLOATVOL */, true /* ADJUSTVOL */>(
                 out, outFrameCount, temp, aux, ramp);
 
     } else { // constant volume gain
         mResampler->setVolume(mVolume[0], mVolume[1]);
         mResampler->resample((int32_t*)out, outFrameCount, bufferProvider);
-    }
+    } // MTK_AUDIOMIXER_ENABLE_DRC
 }
 
 /* This track hook is called to mix a track, when no resampling is required.
@@ -1930,15 +2152,27 @@ template <int MIXTYPE, typename TO, typename TI, typename TA>
 void AudioMixer::Track::track__NoResample(TO* out, size_t frameCount, TO* temp __unused, TA* aux)
 {
     ALOGVV("track__NoResample\n");
-    const TI *in = static_cast<const TI *>(mIn);
+    //const TI *in = static_cast<const TI *>(mIn);
+// <MTK_AUDIOMIXER_ENABLE_DRC
+    const TI *in;
+    if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        in = reinterpret_cast<const TI *>(temp);
+        void *buffer = static_cast<void *>(temp);
+        doPostProcessing<MIXTYPE>(buffer, mMixerInFormat, frameCount);
+    } else {
+        in = static_cast<const TI *>(mIn);
+    }
+// MTK_AUDIOMIXER_ENABLE_DRC>
 
     volumeMix<MIXTYPE, is_same<TI, float>::value /* USEFLOATVOL */, true /* ADJUSTVOL */>(
             out, frameCount, in, aux, needsRamp());
 
     // MIXTYPE_MONOEXPAND reads a single input channel and expands to NCHAN output channels.
     // MIXTYPE_MULTI reads NCHAN input channels and places to NCHAN output channels.
-    in += (MIXTYPE == MIXTYPE_MONOEXPAND) ? frameCount : frameCount * mMixerChannelCount;
-    mIn = in;
+    if (!FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        in += (MIXTYPE == MIXTYPE_MONOEXPAND) ? frameCount : frameCount * mMixerChannelCount;
+        mIn = in;
+    } // !MTK_AUDIOMIXER_ENABLE_DRC
 }
 
 /* The Mixer engine generates either int32_t (Q4_27) or float data.
@@ -1988,7 +2222,7 @@ void AudioMixer::convertMixerFormat(void *out, audio_format_t mixerOutFormat,
 AudioMixer::hook_t AudioMixer::Track::getTrackHook(int trackType, uint32_t channelCount,
         audio_format_t mixerInFormat, audio_format_t mixerOutFormat __unused)
 {
-    if (!kUseNewMixer && channelCount == FCC_2 && mixerInFormat == AUDIO_FORMAT_PCM_16_BIT) {
+    if (!kUseNewMixer && channelCount == FCC_2 && mixerInFormat == AUDIO_FORMAT_PCM_16_BIT && !FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
         switch (trackType) {
         case TRACKTYPE_NOP:
             return &Track::track__nop;
@@ -2069,7 +2303,7 @@ AudioMixer::process_hook_t AudioMixer::getProcessHook(
         LOG_ALWAYS_FATAL("bad processType: %d", processType);
         return NULL;
     }
-    if (!kUseNewMixer && channelCount == FCC_2 && mixerInFormat == AUDIO_FORMAT_PCM_16_BIT) {
+    if (!kUseNewMixer && channelCount == FCC_2 && mixerInFormat == AUDIO_FORMAT_PCM_16_BIT && !FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
         return &AudioMixer::process__oneTrack16BitsStereoNoResampling;
     }
     LOG_ALWAYS_FATAL_IF(channelCount > MAX_NUM_CHANNELS);
@@ -2108,4 +2342,277 @@ AudioMixer::process_hook_t AudioMixer::getProcessHook(
 }
 
 // ----------------------------------------------------------------------------
+// <MTK_AUDIOMIXER_ENABLE_DRC
+bool AudioMixer::mUIDRCEnable = true;
+String8 AudioMixer::mSetCustomScene = String8("");
+
+template <typename TO>
+void AudioMixer::Track::volumeClamp(size_t outFrameCount, TO** temp, bool isClamp)
+{
+    if (!FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        return;
+    }
+
+    if ((mMixerInFormat == AUDIO_FORMAT_PCM_16_BIT) && checkDRCExist()) {
+        size_t i;
+        int32_t n1;
+        int* ptr = (int*)(*temp);
+        int* ptr_out = (int*)(*temp);
+
+        int resamplerChannelCount = mDownmixerBufferProvider.get() != nullptr
+                ? mMixerChannelCount : channelCount;
+        resamplerChannelCount = resamplerChannelCount == 1 ? 2 : resamplerChannelCount;
+        for (i = 0; i < outFrameCount * resamplerChannelCount; i++) {
+            n1 = (*ptr++);
+            if (isClamp) {
+                n1 = (clamp4_27(n1) << 4);
+            } else {
+                n1 = (n1 + (1 << 3)) >> 4;
+            }
+            *ptr_out++ = n1;
+        }
+    }
+}
+
+template <int MIXTYPE>
+bool AudioMixer::Track::doPostProcessing(void *buffer, audio_format_t format, size_t frameCount)
+{
+    if (!FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        return true;
+    }
+
+    if (mStreamType == AUDIO_STREAM_PATCH) {
+        return true;
+    }
+
+    int32_t process_channel = (MIXTYPE == MIXTYPE_MONOEXPAND ? channelCount : mMixerChannelCount);
+
+    bool DRC_enable = checkDRCExist();
+
+    if (FCC_2 == mMixerChannelCount && DRC_enable) {
+        if (!((AUDIO_FORMAT_PCM_32_BIT == format) || (AUDIO_FORMAT_PCM_16_BIT == format) ||
+              (AUDIO_FORMAT_PCM_FLOAT == format))) {
+            ALOGE("%s, format not support!!", __FUNCTION__);
+            return false;
+        }
+
+        // format wrapper start, if need
+        audio_format_t process_format = format;
+        void* processBuffer = buffer;
+
+        if (AUDIO_FORMAT_PCM_FLOAT == process_format) {
+            ALOGV("%s, frameCount (%zu), t->channelCount(%d) process_channel (%d) process_format (%d)",
+                __FUNCTION__, frameCount, channelCount, process_channel, process_format);
+            memcpy_by_audio_format(processBuffer, AUDIO_FORMAT_PCM_32_BIT, buffer, process_format,
+                frameCount * process_channel);
+            process_format = AUDIO_FORMAT_PCM_32_BIT;
+        }
+
+        // ALPS04408933 low latency support drc
+        if (((frameCount >= 512) && (frameCount % 512 == 0)) || (frameCount == 256) ) {
+            int32_t sampleSize = frameCount * process_channel * audio_bytes_per_sample(process_format);
+            applyDRC((void *)buffer, sampleSize, mDRCTempBuffer, process_format, process_channel);
+        }
+
+        // format wrapper end, if need
+        if (process_format != format) {
+            int32_t sampleCount = frameCount * (MIXTYPE == MIXTYPE_MONOEXPAND ? channelCount : mMixerChannelCount);
+
+            ALOGVV("frameCount(%d), sampleCount (%d) format(%d)", frameCount, sampleCount, format);
+            memcpy_by_audio_format(buffer, format, buffer, process_format, sampleCount);
+        }
+    }
+    return true;
+}
+
+void AudioMixer::releaseDRC(int name)
+{
+    if (!FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        return;
+    }
+
+    if(!exists(name))
+        return;
+
+    const std::shared_ptr<Track> &track = mTracks[name];
+
+    if (track->mpDRCObj) {
+        track->mpDRCObj->close();
+        delete track->mpDRCObj;
+        track->mpDRCObj = NULL;
+    }
+}
+
+void AudioMixer::Track::resetDRC()
+{
+    if (!FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        return;
+    }
+
+    if (mpDRCObj) {
+        mpDRCObj->resetBuffer();
+    }
+}
+
+void AudioMixer::Track::updateDRCParam(int sampleRate)
+{
+    if (!FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        return;
+    }
+
+    if (mpDRCObj) {
+        mpDRCObj->resetBuffer();
+        mpDRCObj->close();
+
+        // set true when mStreamType == AUDIO_STREAM_VOICE_CALL
+        mpDRCObj->setParameter(BLOUD_PAR_SET_NOISE_FILTER, (void *)(mStreamType == AUDIO_STREAM_VOICE_CALL));
+        mpDRCObj->setParameter(BLOUD_PAR_SET_SAMPLE_RATE, (void *)(uintptr_t)sampleRate);
+
+        // DRC will always receive 2ch data.
+        if (!doesResample() &&
+            mMixerChannelMask == AUDIO_CHANNEL_OUT_STEREO &&
+            channelMask == AUDIO_CHANNEL_OUT_MONO) {
+            mpDRCObj->setParameter(BLOUD_PAR_SET_CHANNEL_NUMBER, (void *)BLOUD_HD_MONO);
+        } else {
+            mpDRCObj->setParameter(BLOUD_PAR_SET_CHANNEL_NUMBER, (void *)BLOUD_HD_STEREO);
+        }
+
+        if (AUDIO_FORMAT_PCM_16_BIT == mMixerInFormat && !doesResample()) {
+            mpDRCObj->setParameter(BLOUD_PAR_SET_PCM_FORMAT, (void *)BLOUD_IN_Q1P15_OUT_Q1P15);
+        } else {
+            mpDRCObj->setParameter(BLOUD_PAR_SET_PCM_FORMAT, (void *)BLOUD_IN_Q1P31_OUT_Q1P31);
+        }
+
+        mpDRCObj->setCustSceneName(mCustomScene.string());
+        int result = 0;
+        result = mpDRCObj->setParameter(BLOUD_PAR_SET_LOAD_CACHE_PARAM, (void *)NULL);
+        LOG_ALWAYS_FATAL_IF(result < 0, "%s(), load DRC param from cache error, result = %d", __FUNCTION__, result);
+
+        mpDRCObj->setParameter(BLOUD_PAR_SET_WORK_MODE, (void *)AUDIO_CMP_FLT_LOUDNESS_LITE);
+
+        if (FeatureOption::MTK_ENABLE_STEREO_SPEAKER) {
+            mpDRCObj->setParameter(BLOUD_PAR_SET_STEREO_TO_MONO_MODE, (void *)BLOUD_S2M_MODE_NONE);
+        } else {
+            mpDRCObj->setParameter(BLOUD_PAR_SET_STEREO_TO_MONO_MODE, (void *)BLOUD_S2M_MODE_ST2MO2ST);
+        } // MTK_ENABLE_STEREO_SPEAKER
+
+        // ALPS04408933 low latency support drc
+        if (mFlags & AUDIO_OUTPUT_FLAG_FAST) {
+            ALOGD("%s, DRC apply framecount 256", __func__);
+            mpDRCObj->setParameter(BLOUD_PAR_SET_FRAME_LENGTH, (void *)256);
+        }
+
+        // initial set to BLOUD_HD_BYPASS_STATE for ramp up
+        mpDRCObj->setParameter(BLOUD_PAR_SET_RAMP_UP, (void *)(intptr_t)(1));
+        mpDRCObj->open();
+    }
+}
+
+void AudioMixer::Track::setDRCHandler(audio_devices_t device, uint32_t sampleRate)
+{
+    if (!FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        return;
+    }
+
+    if ((device & AUDIO_DEVICE_OUT_SPEAKER) && (mStreamType != AUDIO_STREAM_DTMF)
+#ifdef MTK_AUDIOMIXER_DRC_VOIP_ONLY
+        && (mStreamType == AUDIO_STREAM_VOICE_CALL)
+#endif
+    ) {
+        // Need DRC
+        if (mUIDRCEnable && mpDRCObj == NULL) {
+            // ALPS04408933 low latency support drc
+            if (mStreamType == AUDIO_STREAM_RING) {
+                mpDRCObj = newMtkAudioLoud(AUDIO_COMP_FLT_DRC_FOR_RINGTONE,
+                                            (mFlags & AUDIO_OUTPUT_FLAG_FAST ? true : false));
+            } else {
+                mpDRCObj = newMtkAudioLoud(AUDIO_COMP_FLT_DRC_FOR_MUSIC,
+                                            (mFlags & AUDIO_OUTPUT_FLAG_FAST ? true : false));
+            }
+            updateDRCParam(sampleRate);
+        }
+
+        if (mpDRCObj && mUIDRCEnable != mDRCEnable) {
+            // ALPS04408933 low latency support drc
+            ACE_ERRID result;
+            if (mUIDRCEnable) {
+                result = mpDRCObj->change2Normal();
+            } else {
+                result = mpDRCObj->change2ByPass();
+            }
+            if (result == ACE_SUCCESS) {
+                mDRCEnable = mUIDRCEnable;
+            }
+            else {
+                ALOGE("%s, drc change mode fail", __func__);
+            }
+        }
+    } else {
+        // No need DRC
+        if (mpDRCObj) {
+            mpDRCObj->close();
+            delete mpDRCObj;
+            mpDRCObj = NULL;
+        }
+    }
+}
+
+void AudioMixer::Track::applyDRC(void *ioBuffer, uint32_t SampleSize, int32_t *tempBuffer,
+    __attribute__((unused)) audio_format_t process_format, __attribute__((unused)) int process_channel)
+{
+    if (!FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        return;
+    }
+
+    if (!checkDRCExist()) {
+       return;
+    }
+
+    uint32_t inputSampleSize, outputSampleSize;
+
+    inputSampleSize = outputSampleSize = SampleSize;
+
+#if defined(MTK_AUDIO_DEBUG)
+    if (AudioDump::getProperty(AudioDump::PROP_AUDIO_DUMP_DRC)) {
+        String8 fileName = String8::format("%s_pid%d_tid%d_%p.pcm", AudioDump::af_mixer_drc_pcm_before,
+            getpid(), gettid(), this);
+        AudioDump::threadDump(fileName, ioBuffer, SampleSize, process_format, mDevSampleRate,
+            process_channel);
+    }
+#endif // MTK_AUDIO_DEBUG
+
+    mpDRCObj->process((void *)ioBuffer, &inputSampleSize, (void *)tempBuffer, &outputSampleSize);
+
+#if defined(MTK_AUDIO_DEBUG)
+    if (AudioDump::getProperty(AudioDump::PROP_AUDIO_DUMP_DRC)) {
+        String8 fileName = String8::format("%s_pid%d_tid%d_%p.pcm", AudioDump::af_mixer_drc_pcm_after,
+            getpid(), gettid(), this);
+        AudioDump::threadDump(fileName, tempBuffer, SampleSize, process_format, mDevSampleRate,
+            process_channel);
+    }
+#endif // MTK_AUDIO_DEBUG
+
+    memcpy(ioBuffer, tempBuffer, SampleSize);
+}
+
+bool AudioMixer::Track::checkDRCExist()
+{
+    if (!FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        return false;
+    }
+    return (mpDRCObj != NULL);
+}
+
+static inline int32_t clamp4_27(int32_t sample)
+{
+    if (!FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        return 0;
+    }
+    if ((sample >> 27) ^ (sample >> 31)) {
+        sample = 0x7FFFFFF ^ (sample >> 31);
+    }
+    return sample;
+}
+// MTK_AUDIOMIXER_ENABLE_DRC>
+
 } // namespace android

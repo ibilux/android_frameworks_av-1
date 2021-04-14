@@ -64,4 +64,19 @@ LOCAL_INIT_RC := audioserver.rc
 
 LOCAL_CFLAGS := -Werror -Wall
 
+#MTK_AUDIO B
+LOCAL_C_INCLUDES += \
+        $(TOPDIR)frameworks/av/media/libaudioprocessing/audio-util \
+        $(MTK_PATH_SOURCE)/external/AudioComponentEngine \
+        $(MTK_PATH_SOURCE)/external/audio_utils/common_headers \
+        $(MTK_PATH_SOURCE)/external/audio_utils/common_headers/cgen/cfgfileinc \
+        $(MTK_PATH_SOURCE)/external/audio_utils/common_headers/custom_volume \
+        $(MTK_PATH_SOURCE)/external/audio_utils/common_headers/gain_table
+
+ifeq ($(MTK_AUDIO),yes)
+    LOCAL_CFLAGS += -DMTK_AUDIO
+    LOCAL_CFLAGS += -DMTK_AUDIO_DEBUG
+endif
+#MTK_AUDIO E
+
 include $(BUILD_EXECUTABLE)

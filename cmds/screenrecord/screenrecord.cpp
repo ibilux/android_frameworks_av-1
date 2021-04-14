@@ -702,12 +702,18 @@ static status_t recordScreen(const char* fileName) {
             err = unlink(fileName);
             if (err != 0 && errno != ENOENT) {
                 fprintf(stderr, "ERROR: couldn't remove existing file\n");
-                abort();
+                if (encoder != NULL) encoder->release();  // stop screenrecord instead of abort
+                   ALOGW("couldn't remove existing file");
+                   return err;
+//              abort();
             }
             int fd = open(fileName, O_CREAT | O_LARGEFILE | O_TRUNC | O_RDWR, S_IRUSR | S_IWUSR);
             if (fd < 0) {
                 fprintf(stderr, "ERROR: couldn't open file\n");
-                abort();
+                if (encoder != NULL) encoder->release();  // stop screenrecord instead of abort
+                   ALOGW("couldn't open file");
+                   return err;
+//              abort();
             }
             if (gOutputFormat == FORMAT_MP4) {
                 muxer = new MediaMuxer(fd, MediaMuxer::OUTPUT_FORMAT_MPEG_4);
@@ -1085,7 +1091,7 @@ int main(int argc, char* const argv[]) {
         int fd = open(fileName, O_CREAT | O_RDWR, 0644);
         if (fd < 0) {
             fprintf(stderr, "Unable to open '%s': %s\n", fileName, strerror(errno));
-            return 1;
+            _exit(1);
         }
         close(fd);
     }
@@ -1096,5 +1102,5 @@ int main(int argc, char* const argv[]) {
         notifyMediaScanner(fileName);
     }
     ALOGD(err == NO_ERROR ? "success" : "failed");
-    return (int) err;
+    _exit((int) err);
 }

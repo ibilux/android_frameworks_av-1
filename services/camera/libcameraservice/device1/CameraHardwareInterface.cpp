@@ -30,7 +30,13 @@ CameraHardwareInterface::~CameraHardwareInterface()
 {
     ALOGI("Destroying camera %s", mName.string());
     if (mHidlDevice != nullptr) {
-        mHidlDevice->close();
+//!++
+        hardware::Return<void> ret = mHidlDevice->close();
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error closing camera device %s: %s",
+                    __FUNCTION__, mName.string(), ret.description().c_str());
+        }
+//!--
         mHidlDevice.clear();
         cleanupCirculatingBuffers();
     }
@@ -452,8 +458,29 @@ status_t CameraHardwareInterface::setPreviewWindow(const sp<ANativeWindow>& buf)
                 setPreviewTransform(mPreviewTransform);
             }
         }
-        return CameraProviderManager::mapToStatusT(
-                mHidlDevice->setPreviewWindow(buf.get() ? this : nullptr));
+//!++
+        if(mPreviewWindow.get())
+        {
+            int32_t usage = 0;
+            mPreviewWindow->query(mPreviewWindow.get(), NATIVE_WINDOW_CONSUMER_USAGE_BITS, &usage);
+            const int32_t CAMERA_CMD_SET_NATIVE_WINDOW_CONSUMER_USAGE = 0x20000000; //define in MtkCamera.h
+            hardware::Return<Status> ret = mHidlDevice->sendCommand((CommandType)CAMERA_CMD_SET_NATIVE_WINDOW_CONSUMER_USAGE, usage, 0);
+            if (!ret.isOk()) {
+                ALOGE("%s: Transaction error sending command to camera device %s: %s",
+                    __FUNCTION__, mName.string(), ret.description().c_str());
+                return DEAD_OBJECT;
+            }
+        }
+//!--
+//!++
+        hardware::Return<Status> ret = mHidlDevice->setPreviewWindow(buf.get() ? this : nullptr);
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error setting preview window to camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return DEAD_OBJECT;
+        }
+        return CameraProviderManager::mapToStatusT(ret);
+//!--
     }
     return INVALID_OPERATION;
 }
@@ -477,7 +504,14 @@ void CameraHardwareInterface::enableMsgType(int32_t msgType)
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        mHidlDevice->enableMsgType(msgType);
+//!++
+        hardware::Return<void> ret = mHidlDevice->enableMsgType(msgType);
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error enabling message type of camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return;
+        }
+//!--
     }
 }
 
@@ -485,7 +519,14 @@ void CameraHardwareInterface::disableMsgType(int32_t msgType)
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        mHidlDevice->disableMsgType(msgType);
+//!++
+        hardware::Return<void> ret = mHidlDevice->disableMsgType(msgType);
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error disabling message type of camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return;
+        }
+//!--
     }
 }
 
@@ -493,7 +534,16 @@ int CameraHardwareInterface::msgTypeEnabled(int32_t msgType)
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        return mHidlDevice->msgTypeEnabled(msgType);
+//!++
+        hardware::Return<bool> ret = mHidlDevice->msgTypeEnabled(msgType);
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error checking message type enabled of camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return -1;
+        }
+        int32_t msg = (int32_t)ret;
+        return msg;
+//!--
     }
     return false;
 }
@@ -502,8 +552,15 @@ status_t CameraHardwareInterface::startPreview()
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        return CameraProviderManager::mapToStatusT(
-                mHidlDevice->startPreview());
+//!++
+        hardware::Return<Status> ret = mHidlDevice->startPreview();
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error starting preview of camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return DEAD_OBJECT;
+        }
+        return CameraProviderManager::mapToStatusT(ret);
+//!--
     }
     return INVALID_OPERATION;
 }
@@ -512,15 +569,31 @@ void CameraHardwareInterface::stopPreview()
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        mHidlDevice->stopPreview();
+//!++
+        hardware::Return<void> ret = mHidlDevice->stopPreview();
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error stopping preview of camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return;
+        }
     }
+//!--
 }
 
 int CameraHardwareInterface::previewEnabled()
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        return mHidlDevice->previewEnabled();
+//!++
+        hardware::Return<bool> ret = mHidlDevice->previewEnabled();
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error checking preview enabled of camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return -1;
+        }
+        int result = (int)ret;
+        return result;
+//!--
     }
     return false;
 }
@@ -529,8 +602,15 @@ status_t CameraHardwareInterface::storeMetaDataInBuffers(int enable)
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        return CameraProviderManager::mapToStatusT(
-                mHidlDevice->storeMetaDataInBuffers(enable));
+//!++
+        hardware::Return<Status> ret = mHidlDevice->storeMetaDataInBuffers(enable);
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error setting storing meta data in buffers of camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return DEAD_OBJECT;
+        }
+        return CameraProviderManager::mapToStatusT(ret);
+//!--
     }
     return enable ? INVALID_OPERATION: OK;
 }
@@ -539,8 +619,15 @@ status_t CameraHardwareInterface::startRecording()
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        return CameraProviderManager::mapToStatusT(
-                mHidlDevice->startRecording());
+//!++
+        hardware::Return<Status> ret = mHidlDevice->startRecording();
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error starting recording of camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return DEAD_OBJECT;
+        }
+        return CameraProviderManager::mapToStatusT(ret);
+//!--
     }
     return INVALID_OPERATION;
 }
@@ -552,7 +639,14 @@ void CameraHardwareInterface::stopRecording()
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        mHidlDevice->stopRecording();
+//!++
+        hardware::Return<void> ret = mHidlDevice->stopRecording();
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error stopping recording of camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return;
+        }
+//!--
     }
 }
 
@@ -563,7 +657,16 @@ int CameraHardwareInterface::recordingEnabled()
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        return mHidlDevice->recordingEnabled();
+//!++
+        hardware::Return<bool> ret = mHidlDevice->recordingEnabled();
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error checking recording enabled of camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return -1;
+        }
+        int result = (int)ret;
+        return result;
+//!--
     }
     return false;
 }
@@ -582,11 +685,24 @@ void CameraHardwareInterface::releaseRecordingFrame(const sp<IMemory>& mem)
             // Caching the handle here because md->pHandle will be subject to HAL's edit
             native_handle_t* nh = md->pHandle;
             hidl_handle frame = nh;
-            mHidlDevice->releaseRecordingFrameHandle(heapId, bufferIndex, frame);
+//!++
+            hardware::Return<void> ret = mHidlDevice->releaseRecordingFrameHandle(heapId, bufferIndex, frame);
+            if (!ret.isOk()) {
+                ALOGE("%s: Transaction error releasing recording frame handle of camera device %s: %s",
+                    __FUNCTION__, mName.string(), ret.description().c_str());
+            }
+//!--
             native_handle_close(nh);
             native_handle_delete(nh);
         } else {
-            mHidlDevice->releaseRecordingFrame(heapId, bufferIndex);
+//!++
+            hardware::Return<void> ret = mHidlDevice->releaseRecordingFrame(heapId, bufferIndex);
+            if (!ret.isOk()) {
+                ALOGE("%s: Transaction error releasing recording frame of camera device %s: %s",
+                    __FUNCTION__, mName.string(), ret.description().c_str());
+                return;
+            }
+//!--
         }
     }
 }
@@ -617,7 +733,14 @@ void CameraHardwareInterface::releaseRecordingFrameBatch(const std::vector<sp<IM
         }
     }
 
-    mHidlDevice->releaseRecordingFrameHandleBatch(msgs);
+//!++
+    hardware::Return<void> ret = mHidlDevice->releaseRecordingFrameHandleBatch(msgs);
+    if (!ret.isOk()) {
+        ALOGE("%s: Transaction error releasing recording frame handle batch of camera device %s: %s",
+            __FUNCTION__, mName.string(), ret.description().c_str());
+        return;
+    }
+//!--
 
     for (auto& msg : msgs) {
         native_handle_t* nh = const_cast<native_handle_t*>(msg.frameData.getNativeHandle());
@@ -630,8 +753,15 @@ status_t CameraHardwareInterface::autoFocus()
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        return CameraProviderManager::mapToStatusT(
-                mHidlDevice->autoFocus());
+//!++
+        hardware::Return<Status> ret = mHidlDevice->autoFocus();
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error auto focusing to camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return DEAD_OBJECT;
+        }
+        return CameraProviderManager::mapToStatusT(ret);
+//!--
     }
     return INVALID_OPERATION;
 }
@@ -640,8 +770,15 @@ status_t CameraHardwareInterface::cancelAutoFocus()
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        return CameraProviderManager::mapToStatusT(
-                mHidlDevice->cancelAutoFocus());
+//!++
+        hardware::Return<Status> ret = mHidlDevice->cancelAutoFocus();
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error canceling auto focus to camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return DEAD_OBJECT;
+        }
+        return CameraProviderManager::mapToStatusT(ret);
+//!--
     }
     return INVALID_OPERATION;
 }
@@ -650,8 +787,15 @@ status_t CameraHardwareInterface::takePicture()
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        return CameraProviderManager::mapToStatusT(
-                mHidlDevice->takePicture());
+//!++
+        hardware::Return<Status> ret = mHidlDevice->takePicture();
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error taking piture to camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return DEAD_OBJECT;
+        }
+        return CameraProviderManager::mapToStatusT(ret);
+//!--
     }
     return INVALID_OPERATION;
 }
@@ -660,8 +804,15 @@ status_t CameraHardwareInterface::cancelPicture()
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        return CameraProviderManager::mapToStatusT(
-                mHidlDevice->cancelPicture());
+//!++
+        hardware::Return<Status> ret = mHidlDevice->cancelPicture();
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error canceling picture to camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return DEAD_OBJECT;
+        }
+        return CameraProviderManager::mapToStatusT(ret);
+//!--
     }
     return INVALID_OPERATION;
 }
@@ -670,8 +821,15 @@ status_t CameraHardwareInterface::setParameters(const CameraParameters &params)
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        return CameraProviderManager::mapToStatusT(
-                mHidlDevice->setParameters(params.flatten().string()));
+//!++
+        hardware::Return<Status> ret = mHidlDevice->setParameters(params.flatten().string());
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error setting parameters to camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return DEAD_OBJECT;
+        }
+        return CameraProviderManager::mapToStatusT(ret);
+//!--
     }
     return INVALID_OPERATION;
 }
@@ -682,10 +840,17 @@ CameraParameters CameraHardwareInterface::getParameters() const
     CameraParameters parms;
     if (CC_LIKELY(mHidlDevice != nullptr)) {
         hardware::hidl_string outParam;
-        mHidlDevice->getParameters(
+//!++
+        hardware::Return<void> ret = mHidlDevice->getParameters(
                 [&outParam](const auto& outStr) {
                     outParam = outStr;
                 });
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error getting parameters to camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return parms;
+        }
+//!--
         String8 tmp(outParam.c_str());
         parms.unflatten(tmp);
     }
@@ -696,8 +861,15 @@ status_t CameraHardwareInterface::sendCommand(int32_t cmd, int32_t arg1, int32_t
 {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        return CameraProviderManager::mapToStatusT(
-                mHidlDevice->sendCommand((CommandType) cmd, arg1, arg2));
+//!++
+        hardware::Return<Status> ret = mHidlDevice->sendCommand((CommandType) cmd, arg1, arg2);
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error sending commands to camera device %s: %s",
+                __FUNCTION__, mName.string(), ret.description().c_str());
+            return DEAD_OBJECT;
+        }
+        return CameraProviderManager::mapToStatusT(ret);
+//!--
     }
     return INVALID_OPERATION;
 }
@@ -709,7 +881,13 @@ status_t CameraHardwareInterface::sendCommand(int32_t cmd, int32_t arg1, int32_t
 void CameraHardwareInterface::release() {
     ALOGV("%s(%s)", __FUNCTION__, mName.string());
     if (CC_LIKELY(mHidlDevice != nullptr)) {
-        mHidlDevice->close();
+//!++
+        hardware::Return<void> ret = mHidlDevice->close();
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error closing camera device %s: %s",
+                    __FUNCTION__, mName.string(), ret.description().c_str());
+        }
+//!--
         mHidlDevice.clear();
     }
 }
@@ -723,9 +901,20 @@ status_t CameraHardwareInterface::dump(int fd, const Vector<String16>& /*args*/)
     if (CC_LIKELY(mHidlDevice != nullptr)) {
         native_handle_t* handle = native_handle_create(1,0);
         handle->data[0] = fd;
-        Status s = mHidlDevice->dumpState(handle);
+//!++
+        status_t s = OK;
+        hardware::Return<Status> ret = mHidlDevice->dumpState(handle);
+        if (!ret.isOk()) {
+            ALOGE("%s: Transaction error closing camera device %s: %s",
+                    __FUNCTION__, mName.string(), ret.description().c_str());
+            s = DEAD_OBJECT;
+        }
+        else{
+            s = CameraProviderManager::mapToStatusT(ret);
+        }
         native_handle_delete(handle);
-        return CameraProviderManager::mapToStatusT(s);
+        return s;
+//!--
     }
     return OK; // It's fine if the HAL doesn't implement dump()
 }

@@ -69,5 +69,52 @@ cc_library_shared {
     sanitize: {
         integer_overflow: true,
     },
-
+    defaults: [
+        "mtk_libaudioflinger_defaults",
+    ],
 }
+
+// <MTK_AUDIO
+
+bootstrap_go_package {
+    name:"soong-libaudioflinger-mediatek",
+    pkgPath:"android/soong/libaudioflinger/mediatek",
+    deps:[
+        "soong-android",
+        "soong-cc",
+    ],
+    srcs:[
+        "libaudioflinger.go",
+    ],
+    pluginFor:["soong_build"],
+}
+
+mtk_libaudioflinger_defaults {
+    name: "mtk_libaudioflinger_defaults",
+
+    shared_libs: [
+        "libaudioutilmtk",
+    ],
+
+    include_dirs: [
+        "frameworks/av/media/libaudioprocessing/audio-util",
+        "vendor/mediatek/proprietary/external/AudioCompensationFilter",
+        "vendor/mediatek/proprietary/external/AudioComponentEngine",
+        "vendor/mediatek/proprietary/external/audio_utils/common_headers/cgen/cfgfileinc",
+    ],
+
+    product_variables: {
+        debuggable: {
+            cflags: [
+                "-DCONFIG_MT_USERDEBUG_BUILD",
+            ],
+        },
+        eng: {
+            cflags: [
+                "-UCONFIG_MT_USERDEBUG_BUILD",
+                "-DCONFIG_MT_ENG_BUILD",
+            ],
+        },
+    },
+}
+// MTK_AUDIO>

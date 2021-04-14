@@ -110,6 +110,8 @@ class ServerProxy;
 // ----------------------------------------------------------------------------
 
 static const nsecs_t kDefaultStandbyTimeInNsecs = seconds(3);
+//MTK_AUDIO_FIX_DEFAULT_DEFECT
+static const nsecs_t kDefaultA2dpStandbyTimeInNsecs = milliseconds(500);
 
 #define INCLUDING_FROM_AUDIOFLINGER_H
 
@@ -885,6 +887,10 @@ public:
     bool    isLowRamDevice() const { return mIsLowRamDevice; }
     size_t getClientSharedHeapSize() const;
 
+// <MTK_AUDIOMIXER_ENABLE_DRC
+    MtkAudioCustParamCacheBase    *custParamCache;
+    void    updateDrcParamCache(const String8& customScene = String8(""));
+// MTK_AUDIOMIXER_ENABLE_DRC>
 private:
     std::atomic<bool> mIsLowRamDevice;
     bool    mIsDeviceTypeKnown;

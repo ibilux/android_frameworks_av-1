@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2012 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +31,11 @@
 #include "device1/CameraHardwareInterface.h"
 #include "CameraService.h"
 #include "utils/CameraThreadState.h"
+
+//!++
+//Add MTK header
+#include <camera/mediatek/MtkCamera.h>
+//!--
 
 namespace android {
 
@@ -92,6 +102,9 @@ status_t CameraClient::initialize(sp<CameraProviderManager> manager,
     // Enable zoom, error, focus, and metadata messages by default
     enableMsgType(CAMERA_MSG_ERROR | CAMERA_MSG_ZOOM | CAMERA_MSG_FOCUS |
                   CAMERA_MSG_PREVIEW_METADATA | CAMERA_MSG_FOCUS_MOVE);
+//!++
+    enableMsgType(MTK_CAMERA_MSG_EXT_NOTIFY | MTK_CAMERA_MSG_EXT_DATA); // Enable MTK-extended messages by default
+//!--
 
     LOG1("CameraClient::initialize X (pid %d, id %d)", callingPid, mCameraId);
     return OK;
@@ -726,6 +739,9 @@ status_t CameraClient::sendCommand(int32_t cmd, int32_t arg1, int32_t arg2) {
     if (result != NO_ERROR) return result;
 
     if (cmd == CAMERA_CMD_SET_DISPLAY_ORIENTATION) {
+        //!++
+        LOG1("CAMERA_CMD_SET_DISPLAY_ORIENTATION - tid(%d), (degrees, mirror)=(%d, %d)", ::gettid(), arg1, mCameraFacing); //Add debug log
+        //!--
         // Mirror the preview if the camera is front-facing.
         orientation = getOrientation(arg1, mCameraFacing == CAMERA_FACING_FRONT);
         if (orientation == -1) return BAD_VALUE;
@@ -736,6 +752,10 @@ status_t CameraClient::sendCommand(int32_t cmd, int32_t arg1, int32_t arg2) {
                 mHardware->setPreviewTransform(mOrientation);
             }
         }
+        //!++
+        if(mHardware != 0)
+            mHardware->sendCommand(cmd, mOrientation, arg2);
+        //!--
         return OK;
     } else if (cmd == CAMERA_CMD_ENABLE_SHUTTER_SOUND) {
         switch (arg1) {
@@ -769,6 +789,12 @@ void CameraClient::enableMsgType(int32_t msgType) {
 
 void CameraClient::disableMsgType(int32_t msgType) {
     android_atomic_and(~msgType, &mMsgEnabled);
+//!++
+    if(mHardware == NULL){
+        ALOGW("attempt to use mHardware to disableMsgType(%d) after disconnect()", msgType);
+        return;
+    }
+//!--
     mHardware->disableMsgType(msgType);
 }
 
@@ -834,6 +860,11 @@ void CameraClient::notifyCallback(int32_t msgType, int32_t ext1,
     if (!client->lockIfMessageWanted(msgType)) return;
 
     switch (msgType) {
+//!++
+        case MTK_CAMERA_MSG_EXT_NOTIFY:
+            client->handleMtkExtNotify(ext1, ext2); // Callback extended msg notification.
+            break;
+//!--
         case CAMERA_MSG_SHUTTER:
             // ext1 is the dimension of the yuv picture.
             client->handleShutter();
@@ -859,6 +890,11 @@ void CameraClient::dataCallback(int32_t msgType,
     }
 
     switch (msgType & ~CAMERA_MSG_PREVIEW_METADATA) {
+//!++
+        case MTK_CAMERA_MSG_EXT_DATA:
+            client->handleMtkExtData(dataPtr, metadata); // Callback extended msg notification.
+            break;
+//!--
         case CAMERA_MSG_PREVIEW_FRAME:
             client->handlePreviewData(msgType, dataPtr, metadata);
             break;

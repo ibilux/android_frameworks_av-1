@@ -153,6 +153,7 @@ public:
         case AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER:
         case AUDIO_DEVICE_OUT_USB_ACCESSORY:
         case AUDIO_DEVICE_OUT_REMOTE_SUBMIX:
+        case AUDIO_DEVICE_OUT_BUS:  // MTK_USB_PHONECALL
         default:
             return DEVICE_CATEGORY_SPEAKER;
         }

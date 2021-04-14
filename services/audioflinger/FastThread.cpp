@@ -309,7 +309,11 @@ bool FastThread::threadLoop()
                     // compute the delta value of clock_gettime(CLOCK_MONOTONIC)
                     uint32_t monotonicNs = nsec;
                     if (sec > 0 && sec < 4) {
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+                        monotonicNs += (uint32_t)sec * (uint32_t)1000000000;
+#else
                         monotonicNs += sec * 1000000000;
+#endif
                     }
                     // compute raw CPU load = delta value of clock_gettime(CLOCK_THREAD_CPUTIME_ID)
                     uint32_t loadNs = 0;
@@ -325,7 +329,11 @@ bool FastThread::threadLoop()
                             }
                             loadNs = nsec;
                             if (sec > 0 && sec < 4) {
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+                                loadNs += (uint32_t)sec * (uint32_t)1000000000;
+#else
                                 loadNs += sec * 1000000000;
+#endif
                             }
                         } else {
                             // first time through the loop

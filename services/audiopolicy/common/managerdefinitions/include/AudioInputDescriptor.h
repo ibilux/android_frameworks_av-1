@@ -105,7 +105,8 @@ public:
     // Go over all active clients and suspend or restore effects according highest priority
     // active use case
     void checkSuspendEffects();
-
+    audio_input_flags_t flagsToOpen; // MTK_AUDIO
+    bool isAllNonFastClientsInFastInput();  // MTK_AUDIO
  private:
 
     void updateClientRecordingConfiguration(int event, const sp<RecordClientDescriptor>& client);

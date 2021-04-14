@@ -106,16 +106,17 @@ NuPlayer::Decoder::~Decoder() {
     releaseAndResetMediaBuffers();
 }
 
-sp<AMessage> NuPlayer::Decoder::getStats() const {
+sp<AMessage> NuPlayer::Decoder::getStats() {
 
+    Mutex::Autolock autolock(mStatsLock);
     mStats->setInt64("frames-total", mNumFramesTotal);
     mStats->setInt64("frames-dropped-input", mNumInputFramesDropped);
     mStats->setInt64("frames-dropped-output", mNumOutputFramesDropped);
     mStats->setFloat("frame-rate-total", mFrameRateTotal);
 
-    // i'm mutexed right now.
     // make our own copy, so we aren't victim to any later changes.
     sp<AMessage> copiedStats = mStats->dup();
+
     return copiedStats;
 }
 
@@ -345,6 +346,18 @@ void NuPlayer::Decoder::onConfigure(const sp<AMessage> &format) {
     mIsEncryptedObservedEarlier = mIsEncryptedObservedEarlier || mIsEncrypted;
     ALOGV("onConfigure mCrypto: %p (%d)  mIsSecure: %d",
             crypto.get(), (crypto != NULL ? crypto->getStrongCount() : 0), mIsSecure);
+//mtkadd+
+    if (!strcasecmp(mComponentName.c_str(), "OMX.MTK.AUDIO.DECODER.MP3")) {
+        int32_t mtkmp3extractorFlag = 0;
+        //get mtkmp3extractor flag
+        mSource->setGetMp3Param(&mtkmp3extractorFlag, false /*get*/);
+        if (mtkmp3extractorFlag == 1) {
+            format->setInt32("mtk-mp3extractor", 1);
+            format->setInt32("app-pid", (int32_t)mPid);
+            ALOGV("set mp3 lowpwer flag to decoder app-pid:%ld", (long)mPid);
+        }
+    }
+//mtkadd-
 
     err = mCodec->configure(
             format, mSurface, crypto, 0 /* flags */);
@@ -362,13 +375,17 @@ void NuPlayer::Decoder::onConfigure(const sp<AMessage> &format) {
     CHECK_EQ((status_t)OK, mCodec->getOutputFormat(&mOutputFormat));
     CHECK_EQ((status_t)OK, mCodec->getInputFormat(&mInputFormat));
 
-    mStats->setString("mime", mime.c_str());
-    mStats->setString("component-name", mComponentName.c_str());
+    {
+        Mutex::Autolock autolock(mStatsLock);
+        mStats->setString("mime", mime.c_str());
+        mStats->setString("component-name", mComponentName.c_str());
+    }
 
     if (!mIsAudio) {
         int32_t width, height;
         if (mOutputFormat->findInt32("width", &width)
                 && mOutputFormat->findInt32("height", &height)) {
+            Mutex::Autolock autolock(mStatsLock);
             mStats->setInt32("width", width);
             mStats->setInt32("height", height);
         }
@@ -390,6 +407,15 @@ void NuPlayer::Decoder::onConfigure(const sp<AMessage> &format) {
 
     mPaused = false;
     mResumePending = false;
+//mtkadd+ for mp3 lowpower
+    int32_t mtkMp3Codec = 0;
+    if (!strcasecmp(mComponentName.c_str(), "OMX.MTK.AUDIO.DECODER.MP3")
+            && format->findInt32("mtkMp3Codec", &mtkMp3Codec)) {
+        ALOGV("turn on mp3 codec lowpower mode,mtkMp3Codec:%d.",mtkMp3Codec);
+        mSource->setGetMp3Param(&mtkMp3Codec, true /*set*/); //set mp3 codec sucessfully
+    }
+//mtkadd-
+
 }
 
 void NuPlayer::Decoder::onSetParameters(const sp<AMessage> &params) {
@@ -799,6 +825,7 @@ void NuPlayer::Decoder::handleOutputFormatChange(const sp<AMessage> &format) {
         int32_t width, height;
         if (format->findInt32("width", &width)
                 && format->findInt32("height", &height)) {
+            Mutex::Autolock autolock(mStatsLock);
             mStats->setInt32("width", width);
             mStats->setInt32("height", height);
         }
@@ -1038,6 +1065,36 @@ bool NuPlayer::Decoder::onInputBufferFetched(const sp<AMessage> &msg) {
                         mComponentName.c_str(), (long long)resumeAtMediaTimeUs);
                 mSkipRenderingUntilMediaTimeUs = resumeAtMediaTimeUs;
             }
+#ifdef MSSI_MTK_AUDIO_APE_SUPPORT
+            int32_t newframe =0; //for ape seek
+            int32_t firstbyte =0;
+            if (extra->findInt32("nwfrm", &newframe))
+            {
+                ALOGI("APE nwfrm found :%d line:%d",(int)newframe,__LINE__);
+            }
+            if (extra->findInt32("sekbyte", &firstbyte))
+            {
+                ALOGI("APE sekbyte found :%d line:%d",(int)firstbyte,__LINE__);
+            }
+            if (newframe != 0 || firstbyte !=0)
+            {
+                sp<AMessage> msg = new AMessage;
+                msg->setInt32("nwfrm", newframe);
+                msg->setInt32("sekbyte", firstbyte);
+                mCodec->setParameters(msg);
+            }
+#endif
+            //mtk add seekmode for ALPS03567323 AND ALPS03607769
+            int64_t seekTimeUsForDecoder = 0;
+            if (extra->findInt64(
+                        "decode-seekTime", &seekTimeUsForDecoder)) {
+                if (!mIsAudio && mCodec != NULL) {
+                    sp<AMessage> msg = new AMessage;
+                    msg->setInt64("seekTimeUs", seekTimeUsForDecoder);
+                    mCodec->setParameters(msg);
+                    ALOGI("set video decode seek time:%lld", (long long)seekTimeUsForDecoder);
+                }
+            }
         }
 
         int64_t timeUs = 0;
@@ -1151,6 +1208,13 @@ void NuPlayer::Decoder::onRenderBuffer(const sp<AMessage> &msg) {
         if (mCCDecoder != NULL && mCCDecoder->isSelected()) {
             mCCDecoder->display(timeUs);
         }
+
+        //   set AvSyncRefTime to video codec +
+        int64_t AVSyncTime = 0;
+        if(msg->findInt64("AvSyncRefTimeUs", &AVSyncTime)){
+            buffer->meta()->setInt64("AvSyncRefTimeUs", AVSyncTime);
+        }
+        //   set AvSyncRefTime to video codec -
     }
 
     if (mCodec == NULL) {

@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2012 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -178,6 +183,19 @@ private:
     // This function keeps trying to grab mLock, or give up if the message
     // is found to be disabled. It returns true if mLock is grabbed.
     bool                    lockIfMessageWanted(int32_t msgType);
+
+//!++
+private:
+    void                handleMtkExtNotify(int32_t ext1, int32_t ext2);
+    void                handleMtkExtData(const sp<IMemory>& dataPtr, camera_frame_metadata_t *metadata);
+    //
+    void                handleMtkExtContinuousEnd(int32_t ext1, int32_t ext2);
+    //
+    void                handleMtkExtCaptureDone(int32_t ext1, int32_t ext2);
+    void                handleMtkExtShutter(int32_t ext1, int32_t ext2);
+    void                handleMtkExtDataCompressedImage(const sp<IMemory>& dataPtr, camera_frame_metadata_t *metadata);
+//!--
+
 };
 
 }

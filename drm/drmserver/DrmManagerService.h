@@ -116,6 +116,9 @@ public:
 
     status_t getAllSupportInfo(int uniqueId, int* length, DrmSupportInfo** drmSupportInfoArray);
 
+    // Add by rui to pass client's client to drmserver
+    sp<DecryptHandle> openDecryptSession(int uniqueId, int fd, off64_t offset,
+            off64_t length, const char* mime, pid_t pid);
     sp<DecryptHandle> openDecryptSession(
         int uniqueId, int fd, off64_t offset, off64_t length, const char *mime);
 

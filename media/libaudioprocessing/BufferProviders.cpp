@@ -114,10 +114,23 @@ void CopyBufferProvider::releaseBuffer(AudioBufferProvider::Buffer *pBuffer)
     }
     // LOG_ALWAYS_FATAL_IF(pBuffer->frameCount == 0, "Invalid framecount");
     mConsumed += pBuffer->frameCount; // TODO: update for efficiency to reuse existing content
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+    // ALPS04706726 : enforce release buffer
+    if (mConsumed != 0 && (mConsumed+2) >= mBuffer.frameCount) {
+        if (mConsumed < mBuffer.frameCount) {
+            ALOGV("enforce release buffer");
+            mBuffer.frameCount = mConsumed;
+        }
+        mTrackBufferProvider->releaseBuffer(&mBuffer);
+        ALOG_ASSERT(mBuffer.frameCount == 0);
+    }
+#else
     if (mConsumed != 0 && mConsumed >= mBuffer.frameCount) {
         mTrackBufferProvider->releaseBuffer(&mBuffer);
         ALOG_ASSERT(mBuffer.frameCount == 0);
     }
+#endif
+
     pBuffer->raw = NULL;
     pBuffer->frameCount = 0;
 }

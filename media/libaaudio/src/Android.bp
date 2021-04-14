@@ -75,4 +75,23 @@ cc_library {
         "libbinder",
         "libaudiomanager",
     ],
+
+    defaults: ["mtk_libaaudio_defaults"],
+}
+
+mtk_libaaudio_defaults {
+    name: "mtk_libaaudio_defaults",
+}
+
+bootstrap_go_package  {
+    name:"soong-libaaudio-mediatek",
+    pkgPath:"android/soong/libaaudio/mediatek",
+    deps:[
+        "soong-android",
+        "soong-cc",
+     ],
+    srcs:[
+        "libaaudio.go",
+      ],
+    pluginFor:["soong_build"],
 }

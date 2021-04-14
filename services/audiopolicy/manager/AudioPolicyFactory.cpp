@@ -17,15 +17,25 @@
 #include <AudioPolicyManager.h>
 
 namespace android {
-
+#if defined(MTK_AUDIO)
+AudioPolicyManagerCustomInterface* audiopolicymanagerMTK = NULL;  // MTK_AUDIO
+#endif
 extern "C" AudioPolicyInterface* createAudioPolicyManager(
         AudioPolicyClientInterface *clientInterface)
 {
-    return new AudioPolicyManager(clientInterface);
+#if defined(MTK_AUDIO)
+    audiopolicymanagerMTK = (AudioPolicyManagerCustomInterface*) new AudioPolicyManagerCustomImpl();
+#endif
+    return new AudioPolicyManager(clientInterface, audiopolicymanagerMTK);
 }
 
 extern "C" void destroyAudioPolicyManager(AudioPolicyInterface *interface)
 {
+#if defined(MTK_AUDIO)
+    if (audiopolicymanagerMTK != NULL) {    // MTK_AUDIO
+        delete audiopolicymanagerMTK;
+    }
+#endif
     delete interface;
 }
 

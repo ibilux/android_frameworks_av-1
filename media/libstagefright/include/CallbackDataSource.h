@@ -87,6 +87,10 @@ private:
     size_t mCachedSize;
     String8 mName;
 
+    Mutex mLock;
+    ssize_t readAt2(off64_t offset, void* data, size_t size);
+
+
     DISALLOW_EVIL_CONSTRUCTORS(TinyCacheSource);
 };
 

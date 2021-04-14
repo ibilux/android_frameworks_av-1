@@ -64,6 +64,9 @@ using namespace android::camera3;
 using namespace android::hardware::camera;
 using namespace android::hardware::camera::device::V3_2;
 
+//!++
+static int32_t MTK_DEBUG_ENABLED;
+//!--
 namespace android {
 
 Camera3Device::Camera3Device(const String8 &id):
@@ -88,6 +91,12 @@ Camera3Device::Camera3Device(const String8 &id):
 {
     ATRACE_CALL();
     ALOGV("%s: Created device for camera %s", __FUNCTION__, mId.string());
+//!++
+    char value[PROPERTY_VALUE_MAX];
+    property_get("camera.mtkfwk.debug", value, "1");
+    MTK_DEBUG_ENABLED = atoi(value);
+    ALOGI("%s: MTK framework debug log enabled:%d", __FUNCTION__, MTK_DEBUG_ENABLED);
+//!--
 }
 
 Camera3Device::~Camera3Device()
@@ -2148,6 +2157,16 @@ status_t Camera3Device::waitUntilDrainedLocked(nsecs_t maxExpectedDuration) {
             maxExpectedDuration);
     status_t res = waitUntilStateThenRelock(/*active*/ false, maxExpectedDuration);
     if (res != OK) {
+//!++
+        if (MTK_DEBUG_ENABLED == 1) {
+            String8 str = String8::format("in-flight(%zu): ", mInFlightMap.size());
+            for ( size_t i=0; i<mInFlightMap.size(); ++i ) {
+                str += String8::format("[%zu]:%u", i, mInFlightMap.keyAt(i));
+            }
+            ALOGI("%s: (MTK framework debug log) %s", __FUNCTION__, str.string());
+        }
+//!--
+
         SET_ERR_L("Error waiting for HAL to drain: %s (%d)", strerror(-res),
                 res);
     }
@@ -3521,6 +3540,9 @@ void Camera3Device::sendCaptureResult(CameraMetadata &pendingMetadata,
                 frameNumber);
         return;
     }
+
+    nsecs_t sensorTimestamp = timestamp.data.i64[0];
+
     for (auto& physicalMetadata : captureResult.mPhysicalMetadatas) {
         camera_metadata_entry timestamp =
                 physicalMetadata.mPhysicalCameraMetadata.find(ANDROID_SENSOR_TIMESTAMP);
@@ -3575,7 +3597,7 @@ void Camera3Device::sendCaptureResult(CameraMetadata &pendingMetadata,
                 CameraMetadata(m.mPhysicalCameraMetadata));
     }
     mTagMonitor.monitorMetadata(TagMonitor::RESULT,
-            frameNumber, timestamp.data.i64[0], captureResult.mMetadata,
+            frameNumber, sensorTimestamp, captureResult.mMetadata,
             monitoredPhysicalMetadata);
 
     insertResultLocked(&captureResult, frameNumber);
@@ -5334,7 +5356,11 @@ bool Camera3Device::RequestThread::updateSessionParameters(const CameraMetadata&
             }
 
             if (isDifferent) {
-                ALOGV("%s: Session parameter tag id %d changed", __FUNCTION__, tag);
+//!++
+                if (MTK_DEBUG_ENABLED == 1) {
+                    ALOGI("%s: (MTK framework debug log) Session parameter tag id %d changed", __FUNCTION__, tag);
+                }
+//!--
                 if (!skipHFRTargetFPSUpdate(tag, entry, lastEntry)) {
                     updatesDetected = true;
                 }
@@ -5342,7 +5368,11 @@ bool Camera3Device::RequestThread::updateSessionParameters(const CameraMetadata&
             }
         } else if (lastEntry.count > 0) {
             // Value has been removed
-            ALOGV("%s: Session parameter tag id %d removed", __FUNCTION__, tag);
+//!++
+            if (MTK_DEBUG_ENABLED == 1) {
+                ALOGI("%s: (MTK framework debug log) Session parameter tag id %d removed", __FUNCTION__, tag);
+            }
+//!--
             updatedParams.erase(tag);
             updatesDetected = true;
         }

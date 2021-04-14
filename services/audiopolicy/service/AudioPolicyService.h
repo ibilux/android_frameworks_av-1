@@ -37,6 +37,7 @@
 #include <android/hardware/BnSensorPrivacyListener.h>
 
 #include <unordered_map>
+#include "managerdefault/AudioPolicyManager.h"
 
 namespace android {
 
@@ -299,6 +300,15 @@ public:
             void setEffectSuspended(int effectId,
                                     audio_session_t sessionId,
                                     bool suspended);
+            // MTK_AUDIO
+            virtual status_t setPolicyManagerParameters(int par1, int par2, int par3, int par4);
+             virtual status_t startOutputSamplerate(audio_port_handle_t portId,
+                                          int samplerate);
+             virtual status_t stopOutputSamplerate(audio_port_handle_t portId,
+                                                 int samplerate);
+             virtual status_t doStopOutputSamplerate(audio_port_handle_t portId,
+                                               int samplerate);
+            virtual status_t getCustomAudioVolume(void* pCustomVol);
 
 private:
                         AudioPolicyService() ANDROID_API;
@@ -439,6 +449,8 @@ private:
             DYN_POLICY_MIX_STATE_UPDATE,
             RECORDING_CONFIGURATION_UPDATE,
             SET_EFFECT_SUSPENDED,
+            GET_CUSTOM_AUDIO_VOLUME, // MTK_AUDIO
+            STOP_OUTPUT_SAMPLERATE, // MTK_AUDIO
         };
 
         AudioCommandThread (String8 name, const wp<AudioPolicyService>& service);
@@ -485,6 +497,11 @@ private:
                                                           audio_session_t sessionId,
                                                           bool suspended);
                     void        insertCommand_l(AudioCommand *command, int delayMs = 0);
+                    // MTK_AUDIO
+                    status_t    getCustomAudioVolumeCommand(void* pCustomVol);
+                    void        stopOutputSamplerateCommand(audio_port_handle_t portId,
+                                                  int samplerate);
+
     private:
         class AudioCommandData;
 
@@ -586,6 +603,21 @@ private:
             int mEffectId;
             audio_session_t mSessionId;
             bool mSuspended;
+        };
+
+        // MTK_AUDIO
+        class GetGainTableData : public AudioCommandData {
+        public:
+            GainTableParam mGainTable;
+        };
+        class GetCustomAudioVolumeData : public AudioCommandData {
+        public:
+            AUDIO_CUSTOM_VOLUME_STRUCT mVolConfig;
+        };
+        class StopOutputDataSamplerate : public AudioCommandData {
+        public:
+            audio_port_handle_t mPortId;
+            int mSamplerate;
         };
 
         Mutex   mLock;
@@ -705,6 +737,8 @@ private:
 
         virtual audio_unique_id_t newAudioUniqueId(audio_unique_id_use_t use);
 
+        /* MTK_AUDIO */
+        virtual status_t getCustomAudioVolume(void* pCustomVol);
      private:
         AudioPolicyService *mAudioPolicyService;
     };
@@ -839,6 +873,7 @@ private:
     // Note: lock acquisition order is always mLock > mEffectsLock:
     // mLock protects AudioPolicyManager methods that can call into audio flinger
     // and possibly back in to audio policy service and acquire mEffectsLock.
+    mutable Mutex mMTKDeviceConnectionLock;     // MTK_AUDIO ALPS03743535
     sp<AudioCommandThread> mAudioCommandThread;     // audio commands thread
     sp<AudioCommandThread> mOutputCommandThread;    // process stop and release output
     struct audio_policy_device *mpAudioPolicyDev;

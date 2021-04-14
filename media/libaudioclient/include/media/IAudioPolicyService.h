@@ -145,6 +145,13 @@ public:
     // Check if direct playback is possible for given format, sample rate, channel mask and flags.
     virtual bool isDirectOutputSupported(const audio_config_base_t& config,
                                          const audio_attributes_t& attributes) = 0;
+//<MTK_AUDIO_ADD
+    virtual status_t setPolicyManagerParameters(int par1, int par2, int par3, int par4) = 0;
+    virtual status_t startOutputSamplerate(audio_port_handle_t portId,
+                                 int samplerate) = 0;
+    virtual status_t stopOutputSamplerate(audio_port_handle_t portId,
+                                  int samplerate) = 0;
+//MTK_AUDIO_ADD>
 
     /* List available audio ports and their attributes */
     virtual status_t listAudioPorts(audio_port_role_t role,
@@ -238,6 +245,9 @@ private:
     void sanetizeAudioAttributes(audio_attributes_t* attr);
     status_t sanitizeEffectDescriptor(effect_descriptor_t* desc);
     status_t sanitizeAudioPortConfig(struct audio_port_config* config);
+//<MTK_AUDIO_ADD
+    bool bypass_transact_check = 0;
+//MTK_AUDIO_ADD>
 };
 
 // ----------------------------------------------------------------------------

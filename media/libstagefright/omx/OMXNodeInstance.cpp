@@ -138,6 +138,11 @@ struct BufferMeta {
             return;
         }
 
+        // add NULL check to avoid memcpy on freed buffer
+        if (header == NULL) {
+            return;
+        }
+
         // check component returns proper range
         sp<ABuffer> codec = getBuffer(header, true /* limit */);
 
@@ -492,6 +497,13 @@ status_t OMXNodeInstance::freeNode() {
         }
 
         case OMX_StateLoaded:
+        {
+            if (mActiveBuffers.size() > 0) {
+                ALOGD("freeNode: still has %zu activeBuffers", mActiveBuffers.size());
+                freeActiveBuffers();
+            }
+            FALLTHROUGH_INTENDED;
+        }
         case OMX_StateInvalid:
             break;
 

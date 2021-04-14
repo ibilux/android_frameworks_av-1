@@ -998,8 +998,10 @@ status_t BnAudioFlinger::onTransact(
             break;
     }
 
+#if !defined(CONFIG_MT_ENG_BUILD) && !defined(CONFIG_MT_USERDEBUG_BUILD)
     std::string tag("IAudioFlinger command " + std::to_string(code));
     TimeCheck check(tag.c_str());
+#endif
 
     switch (code) {
         case CREATE_TRACK: {

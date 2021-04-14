@@ -81,6 +81,7 @@
 #include "nuplayer/NuPlayerDriver.h"
 
 #include "HTTPBase.h"
+#include "RemoteDisplay.h"
 
 static const int kDumpLockRetries = 50;
 static const int kDumpLockSleepUs = 20000;
@@ -253,6 +254,67 @@ void unmarshallAudioAttributes(const Parcel& parcel, audio_attributes_t *attribu
 
 
 namespace android {
+// wfd
+// add the declaration of checkPermission to avoid the using error
+static bool checkPermission(const char* permissionString);
+status_t MediaPlayerService::enableRemoteDisplay(const char *iface) {
+    if (!checkPermission("android.permission.CONTROL_WIFI_DISPLAY")) {
+        return PERMISSION_DENIED;
+    }
+
+    Mutex::Autolock autoLock(mLock);
+
+    if (iface != NULL) {
+        if (mRemoteDisplay != NULL) {
+            return INVALID_OPERATION;
+        }
+
+        mRemoteDisplay = new RemoteDisplay(String16(""), NULL /* client */, iface);
+        return OK;
+    }
+
+    if (mRemoteDisplay != NULL) {
+        mRemoteDisplay->dispose();
+        mRemoteDisplay.clear();
+    }
+
+
+    return OK;
+}
+
+status_t MediaPlayerService::enableRemoteDisplay(const char *iface, const uint32_t wfdFlags) {
+    if (!checkPermission("android.permission.CONTROL_WIFI_DISPLAY")) {
+        return PERMISSION_DENIED;
+    }
+
+    Mutex::Autolock autoLock(mLock);
+
+    if (iface != NULL) {
+        if (mRemoteDisplay != NULL) {
+            return INVALID_OPERATION;
+        }
+
+    #ifdef MTK_WFD_SINK_SUPPORT
+        if (wfdFlags == WifiDisplaySink::FLAG_SIGMA_TEST_MODE) {
+            mRemoteDisplay = new RemoteDisplay(
+                NULL /* client*/, iface, (const sp<IGraphicBufferProducer> &)NULL);
+        }
+        else
+    #endif /* MTK_WFD_SINK_SUPPORT */
+        {
+            mRemoteDisplay = new RemoteDisplay(
+                String16(""), NULL /* client */, iface, wfdFlags);
+        }
+        return OK;
+    }
+
+    if (mRemoteDisplay != NULL) {
+        mRemoteDisplay->dispose();
+        mRemoteDisplay.clear();
+    }
+
+    return OK;
+}
 
 extern ALooperRoster gLooperRoster;
 
@@ -338,12 +400,13 @@ sp<IMediaCodecList> MediaPlayerService::getCodecList() const {
 }
 
 sp<IRemoteDisplay> MediaPlayerService::listenForRemoteDisplay(
-        const String16 &/*opPackageName*/,
-        const sp<IRemoteDisplayClient>& /*client*/,
-        const String8& /*iface*/) {
-    ALOGE("listenForRemoteDisplay is no longer supported!");
+        const String16 &opPackageName,
+        const sp<IRemoteDisplayClient>& client, const String8& iface) {
+    if (!checkPermission("android.permission.CONTROL_WIFI_DISPLAY")) {
+        return NULL;
+    }
 
-    return NULL;
+    return new RemoteDisplay(opPackageName, client, iface.string());
 }
 
 status_t MediaPlayerService::AudioOutput::dump(int fd, const Vector<String16>& args) const

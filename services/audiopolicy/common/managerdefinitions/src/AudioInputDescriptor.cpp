@@ -238,6 +238,7 @@ status_t AudioInputDescriptor::open(const audio_config_t *config,
         mId = AudioPort::getNextUniqueId();
         mIoHandle = *input;
         mProfile->curOpenCount++;
+        flagsToOpen = flags;    // MTK_AUDIO
     }
 
     return status;
@@ -497,6 +498,32 @@ void AudioInputDescriptor::checkSuspendEffects()
         }
     }
 }
+
+bool AudioInputDescriptor::isAllNonFastClientsInFastInput()
+{
+    // Don't care or no client, just return false
+#if defined(MTK_AUDIO)
+    if (flagsToOpen & AUDIO_INPUT_FLAG_FAST) {
+        size_t client_count = getClientCount();
+        if (client_count == 0) {
+            return false;
+        } else {
+            bool allNonFast = true;
+            for (const auto &client : getClientIterable()) {
+                if (client->flags() & AUDIO_INPUT_FLAG_FAST) {
+                    allNonFast = false;
+                }
+                ALOGD("multipleRecord client_count %zu [id=%d, flag=0x%x] Client [portid=%d, session=%d, flags=0x%x, source=%d, appState=%d, active=%d", client_count, mIoHandle, flagsToOpen, client->portId(), client->session(), client->flags(), client->source(), client->appState(), client->active());
+            }
+            return allNonFast;
+        }
+    }
+    return false;
+#else
+    return false;
+#endif
+}
+
 
 void AudioInputDescriptor::dump(String8 *dst) const
 {

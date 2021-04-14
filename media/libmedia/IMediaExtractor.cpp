@@ -43,6 +43,9 @@ enum {
 
 class BpMediaExtractor : public BpInterface<IMediaExtractor> {
 public:
+//mtkadd+
+    String8 mName;
+//mtkadd-
     explicit BpMediaExtractor(const sp<IBinder>& impl)
         : BpInterface<IMediaExtractor>(impl)
     {
@@ -126,6 +129,16 @@ public:
     }
 
     virtual const char * name() {
+//mtkadd+
+        ALOGV("name");
+        Parcel data, reply;
+        data.writeInterfaceToken(BpMediaExtractor::getInterfaceDescriptor());
+        status_t ret = remote()->transact(NAME, data, &reply);
+        if (ret == NO_ERROR) {
+            mName = reply.readString8();
+            return mName.string();
+        }
+//mtkadd-
         ALOGV("name NOT IMPLEMENTED");
         return NULL;
     }
@@ -206,6 +219,18 @@ status_t BnMediaExtractor::onTransact(
             reply->writeInt32(setMediaCas(casToken));
             return OK;
         }
+//mtkadd+
+        case NAME: {
+            ALOGV("name");
+            CHECK_INTERFACE(IMediaExtractor, data, reply);
+            const char *extractorName = name();
+            if (extractorName != NULL) {
+                reply->writeString8(String8(extractorName));
+                return NO_ERROR;
+            }
+            return UNKNOWN_ERROR;
+        }
+//mtkadd-
         default:
             return BBinder::onTransact(code, data, reply, flags);
     }

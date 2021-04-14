@@ -20,6 +20,9 @@
 #include "EngineConfig.h"
 #include <policy.h>
 #include <cutils/properties.h>
+#if defined(MTK_AUDIO)
+#include <media/AudioUtilmtk.h>
+#endif
 #include <media/TypeConverter.h>
 #include <media/convert.h>
 #include <utils/Log.h>
@@ -591,11 +594,13 @@ static status_t deserializeLegacyVolumeCollection(_xmlDoc *doc, const _xmlNode *
     for (const auto &volumeMapIter : legacyVolumeMap) {
         // In order to let AudioService setting the min and max (compatibility), set Min and Max
         // to -1 except for private streams
+        // In case of MTK_AUDIO_GAIN_NVRAM do not set negative indices
         audio_stream_type_t streamType;
         if (!StreamTypeConverter::fromString(volumeMapIter.first, streamType)) {
             ALOGE("%s: Invalid stream %s", __func__, volumeMapIter.first.c_str());
             return BAD_VALUE;
         }
+
         int indexMin = streamType >= AUDIO_STREAM_PUBLIC_CNT ? 0 : -1;
         int indexMax = streamType >= AUDIO_STREAM_PUBLIC_CNT ? 100 : -1;
         volumeGroups.push_back({ volumeMapIter.first, indexMin, indexMax, volumeMapIter.second });

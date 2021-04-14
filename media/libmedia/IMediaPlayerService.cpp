@@ -43,6 +43,8 @@ enum {
     PULL_BATTERY_DATA,
     LISTEN_FOR_REMOTE_DISPLAY,
     GET_CODEC_LIST,
+    ENABLE_REMOTE_DISPLAY,
+    ENABLE_FAST_REMOTE_DISPLAY
 };
 
 class BpMediaPlayerService: public BpInterface<IMediaPlayerService>
@@ -112,6 +114,40 @@ public:
         remote()->transact(GET_CODEC_LIST, data, &reply);
         return interface_cast<IMediaCodecList>(reply.readStrongBinder());
     }
+
+    /// M: MTK WFD added on feature @{
+    virtual status_t enableRemoteDisplay(const char *iface) {
+        Parcel data, reply;
+        data.writeInterfaceToken(IMediaPlayerService::getInterfaceDescriptor());
+
+        if (iface != NULL) {
+            data.writeInt32(1);
+            data.writeCString(iface);
+        } else {
+            data.writeInt32(0);
+        }
+
+        remote()->transact(ENABLE_REMOTE_DISPLAY, data, &reply);
+        return reply.readInt32();
+    }
+
+    virtual status_t enableRemoteDisplay(const char *iface, const uint32_t wfdFlags) {
+        Parcel data, reply;
+        data.writeInterfaceToken(IMediaPlayerService::getInterfaceDescriptor());
+
+
+        if (iface != NULL) {
+            data.writeInt32(1);
+            data.writeCString(iface);
+        } else {
+            data.writeInt32(0);
+        }
+        data.writeInt32(wfdFlags);
+
+        remote()->transact(ENABLE_FAST_REMOTE_DISPLAY, data, &reply);
+        return reply.readInt32();
+    }
+/// @}
 };
 
 IMPLEMENT_META_INTERFACE(MediaPlayerService, "android.media.IMediaPlayerService");
@@ -173,6 +209,27 @@ status_t BnMediaPlayerService::onTransact(
             CHECK_INTERFACE(IMediaPlayerService, data, reply);
             sp<IMediaCodecList> mcl = getCodecList();
             reply->writeStrongBinder(IInterface::asBinder(mcl));
+            return NO_ERROR;
+        } break;
+        case ENABLE_REMOTE_DISPLAY: {
+            CHECK_INTERFACE(IMediaPlayerService, data, reply);
+            const char *iface = NULL;
+            if (data.readInt32()) {
+                iface = data.readCString();
+            }
+            reply->writeInt32(enableRemoteDisplay(iface));
+            return NO_ERROR;
+        } break;
+        case ENABLE_FAST_REMOTE_DISPLAY: {
+            CHECK_INTERFACE(IMediaPlayerService, data, reply);
+            const char *iface = NULL;
+
+            if (data.readInt32()) {
+                iface = data.readCString();
+            }
+            const uint32_t wfdFlags = data.readInt32();
+
+            reply->writeInt32(enableRemoteDisplay(iface, wfdFlags));
             return NO_ERROR;
         } break;
         default:

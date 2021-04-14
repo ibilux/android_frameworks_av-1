@@ -179,7 +179,11 @@ static pthread_mutex_t gPcmDumpLock = PTHREAD_MUTEX_INITIALIZER;
 // Automatic Gain Control
 static const effect_descriptor_t sAgcDescriptor = {
         { 0x0a8abfe0, 0x654c, 0x11e0, 0xba26, { 0x00, 0x02, 0xa5, 0xd5, 0xc5, 0x1b } }, // type
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+        { 0x3387eb70, 0x9896, 0x4338, 0x90f5, { 0xb2, 0xde, 0x88, 0x38, 0x64, 0xc9 } }, // uuid
+#else
         { 0xaa8130e0, 0x66fc, 0x11e0, 0xbad0, { 0x00, 0x02, 0xa5, 0xd5, 0xc5, 0x1b } }, // uuid
+#endif
         EFFECT_CONTROL_API_VERSION,
         (EFFECT_FLAG_TYPE_PRE_PROC|EFFECT_FLAG_DEVICE_IND),
         0, //FIXME indicate CPU load
@@ -191,7 +195,11 @@ static const effect_descriptor_t sAgcDescriptor = {
 // Acoustic Echo Cancellation
 static const effect_descriptor_t sAecDescriptor = {
         { 0x7b491460, 0x8d4d, 0x11e0, 0xbd61, { 0x00, 0x02, 0xa5, 0xd5, 0xc5, 0x1b } }, // type
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+        { 0x9f35ed76, 0x0b66, 0x4330, 0x8f79, { 0xe3, 0x9c, 0xa2, 0x66, 0xdc, 0x7c } }, // uuid
+#else
         { 0xbb392ec0, 0x8d4d, 0x11e0, 0xa896, { 0x00, 0x02, 0xa5, 0xd5, 0xc5, 0x1b } }, // uuid
+#endif
         EFFECT_CONTROL_API_VERSION,
         (EFFECT_FLAG_TYPE_PRE_PROC|EFFECT_FLAG_DEVICE_IND),
         0, //FIXME indicate CPU load
@@ -203,7 +211,11 @@ static const effect_descriptor_t sAecDescriptor = {
 // Noise suppression
 static const effect_descriptor_t sNsDescriptor = {
         { 0x58b4b260, 0x8e06, 0x11e0, 0xaa8e, { 0x00, 0x02, 0xa5, 0xd5, 0xc5, 0x1b } }, // type
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+        { 0x300abe9f, 0xdfc5, 0x4340, 0x9c4b, { 0x79, 0xef, 0x1b, 0xe4, 0xe6, 0x51 } }, // uuid
+#else
         { 0xc06c8400, 0x8e06, 0x11e0, 0x9cb6, { 0x00, 0x02, 0xa5, 0xd5, 0xc5, 0x1b } }, // uuid
+#endif
         EFFECT_CONTROL_API_VERSION,
         (EFFECT_FLAG_TYPE_PRE_PROC|EFFECT_FLAG_DEVICE_IND),
         0, //FIXME indicate CPU load

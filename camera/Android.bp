@@ -46,6 +46,10 @@ cc_library_shared {
         "CameraBase.cpp",
         "CameraUtils.cpp",
         "VendorTagDescriptor.cpp",
+        //!++
+        "mediatek/Camera.cpp",
+        "mediatek/MtkCamera.cpp",
+        //!--
     ],
 
     shared_libs: [
@@ -64,7 +68,10 @@ cc_library_shared {
     ],
     export_include_dirs: [
          "include",
-         "include/camera"
+         "include/camera",
+         //!++
+         "include/camera/mediatek",
+         //!--
     ],
     export_shared_lib_headers: ["libcamera_metadata"],
 

@@ -44,4 +44,10 @@ cc_library_static {
         "libaudiopolicycomponents",
         "libaudiopolicyengine_config",
     ],
+//<MTKAddED
+    include_dirs: [
+        "frameworks/av/services/audiopolicy/custom_extensions",
+        "frameworks/av/services/audiopolicy",
+    ],
+//MTKAddED>
 }

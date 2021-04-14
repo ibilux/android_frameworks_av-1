@@ -30,6 +30,12 @@ cc_binary {
         "libbinder",
         "libdl",
         "libselinux",
+        "libdrmmtkutil",
+	"libcutils",
+    ],
+
+    include_dirs: [
+        "vendor/mediatek/proprietary/frameworks/av/drm/include",
     ],
 
     static_libs: ["libdrmframeworkcommon"],

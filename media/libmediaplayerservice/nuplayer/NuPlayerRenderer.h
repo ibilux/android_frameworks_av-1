@@ -18,6 +18,8 @@
 
 #define NUPLAYER_RENDERER_H_
 
+#include <atomic>
+
 #include <media/AudioResamplerPublic.h>
 #include <media/AVSyncSettings.h>
 
@@ -219,6 +221,14 @@ private:
     bool mUseAudioCallback;
 
     sp<AWakeLock> mWakeLock;
+
+    std::atomic_flag mSyncFlag = ATOMIC_FLAG_INIT;
+    Mutex mSyncLock;
+    Condition mSyncCondition;
+    int64_t mSyncCount{0};
+
+    uint32_t mLastFrameAt;  // for start & seek not smooth
+    int64_t mPadding;  // for start & seek not smooth
 
     status_t getCurrentPositionOnLooper(int64_t *mediaUs);
     status_t getCurrentPositionOnLooper(

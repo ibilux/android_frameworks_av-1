@@ -16,6 +16,9 @@
 
 #define LOG_TAG "APM::Serializer"
 //#define LOG_NDEBUG 0
+#if defined(MTK_AUDIO_DEBUG) && defined(CONFIG_MT_ENG_BUILD)
+#define LOG_NDEBUG 0
+#endif
 
 #include <memory>
 #include <string>
@@ -405,6 +408,15 @@ Return<AudioProfileTraits::Element> AudioProfileTraits::deserialize(const xmlNod
             channelMasksFromString(channels, ","),
             samplingRatesFromString(samplingRates, ","));
 
+#if defined(MTK_AUDIO)
+        // If the supported channel mask contain AUDIO_CHANNEL_IN_VOICE_UPLINK & AUDIO_CHANNEL_IN_VOICE_DNLINK
+        // We add AUDIO_CHANNEL_IN_VOICE_UPLINK|AUDIO_CHANNEL_IN_VOICE_DNLINK channel mask to supported channel mask list
+    if (profile->getChannels().indexOf(AUDIO_CHANNEL_IN_VOICE_UPLINK) >= 0
+        && profile->getChannels().indexOf(AUDIO_CHANNEL_IN_VOICE_DNLINK) >= 0
+        && profile->getChannels().indexOf(AUDIO_CHANNEL_IN_VOICE_UPLINK | AUDIO_CHANNEL_IN_VOICE_DNLINK) < 0) {
+            profile->addChannelMask(AUDIO_CHANNEL_IN_VOICE_UPLINK | AUDIO_CHANNEL_IN_VOICE_DNLINK);
+    }
+#endif
     profile->setDynamicFormat(profile->getFormat() == gDynamicFormat);
     profile->setDynamicChannels(profile->getChannels().isEmpty());
     profile->setDynamicRate(profile->getSampleRates().isEmpty());

@@ -16,7 +16,11 @@
 */
 
 
+#if defined(MTK_AUDIO_DEBUG)
+#define LOG_TAG "AudioFlinger_Threads"
+#else
 #define LOG_TAG "AudioFlinger"
+#endif // MTK_AUDIO_DEBUG
 //#define LOG_NDEBUG 0
 #define ATRACE_TAG ATRACE_TAG_AUDIO
 
@@ -85,7 +89,18 @@
 
 #include <pthread.h>
 #include "TypedLogger.h"
+#if defined(MTK_AUDIO_DEBUG)
+#include <media/AudioUtilmtk.h>
+#endif // MTK_AUDIO_DEBUG
+#include <media/MtkLogger.h>
 
+#if defined(MTK_LATENCY_DETECT_PULSE)
+#include "AudioDetectPulse.h"
+#endif // MTK_LATENCY_DETECT_PULSE
+
+// <MTK_AUDIOMIXER_ENABLE_DRC
+#include "AudioLoudmtk.h"
+// MTK_AUDIOMIXER_ENABLE_DRC>
 // ----------------------------------------------------------------------------
 
 // Note: the following macro is used for extremely verbose logging message.  In
@@ -477,6 +492,7 @@ AudioFlinger::ThreadBase::ThreadBase(const sp<AudioFlinger>& audioFlinger, audio
         mSignalPending(false)
 {
     memset(&mPatch, 0, sizeof(struct audio_patch));
+    InitializeMTKLogLevel("vendor.af.audioflinger.log");
 }
 
 AudioFlinger::ThreadBase::~ThreadBase()
@@ -688,6 +704,9 @@ void AudioFlinger::ThreadBase::processConfigEvents_l()
             mLocalLog.log("CFG_EVENT_CREATE_AUDIO_PATCH: old device %#x (%s) new device %#x (%s)",
                     (unsigned)oldDevice, toString(oldDevice).c_str(),
                     (unsigned)newDevice, toString(newDevice).c_str());
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+            configChanged = true;  // ALPS04203621: update a2dp standby time
+#endif
         } break;
         case CFG_EVENT_RELEASE_AUDIO_PATCH: {
             const audio_devices_t oldDevice = getDevice();
@@ -923,6 +942,16 @@ String16 AudioFlinger::ThreadBase::getWakeLockTag()
 
 void AudioFlinger::ThreadBase::acquireWakeLock_l()
 {
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+    /* Google issue : Only framework records the wakelock name
+    kernel use PowerManagerService.WakeLock as the unifying name
+    So do the modification on framewrok layer */
+    String16 Tag = getWakeLockTag();
+    if (Tag == String16("AudioOffload")) {
+        return;
+    }
+#endif
+
     getPowerManager_l();
     if (mPowerManager != 0) {
         sp<IBinder> binder = new BBinder();
@@ -952,6 +981,15 @@ void AudioFlinger::ThreadBase::releaseWakeLock()
 void AudioFlinger::ThreadBase::releaseWakeLock_l()
 {
     gBoottime.release(mWakeLockToken);
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+    /* Google issue : Only framework records the wakelock name
+        kernel use PowerManagerService.WakeLock as the unifying name
+        So do the modification on framewrok layer */
+    String16 Tag = getWakeLockTag();
+    if (Tag == String16("AudioOffload")) {
+        return;
+    }
+#endif
     if (mWakeLockToken != 0) {
         ALOGV("releaseWakeLock_l() %s", mThreadName);
         if (mPowerManager != 0) {
@@ -1771,6 +1809,10 @@ AudioFlinger::PlaybackThread::PlaybackThread(const sp<AudioFlinger>& audioFlinge
         mHwSupportsPause(false), mHwPaused(false), mFlushPending(false),
         mLeftVolFloat(-1.0), mRightVolFloat(-1.0)
 {
+// <MTK_AUDIO_DEBUG
+    mWriteMutedData = false;
+    mWriteMutedDataCount = 0;
+// MTK_AUDIO_DEBUG>
     snprintf(mThreadName, kThreadNameLength, "AudioOut_%X", id);
     mNBLogWriter = audioFlinger->newWriter_l(kLogSize, mThreadName);
 
@@ -1967,6 +2009,9 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
     audio_output_flags_t outputFlags = mOutput->flags;
     audio_output_flags_t requestedFlags = *flags;
     uint32_t sampleRate;
+// <MTK_AUDIOMIXER_ENABLE_DRC
+    audio_output_flags_t flagsOriginal;
+// MTK_AUDIOMIXER_ENABLE_DRC>
 
     if (sharedBuffer != 0 && checkIMemory(sharedBuffer) != NO_ERROR) {
         lStatus = BAD_VALUE;
@@ -1978,10 +2023,20 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
     }
     sampleRate = *pSampleRate;
 
+    if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        flagsOriginal = *flags;
+    } // MTK_AUDIOMIXER_ENABLE_DRC
+
     // special case for FAST flag considered OK if fast mixer is present
     if (hasFastMixer()) {
         outputFlags = (audio_output_flags_t)(outputFlags | AUDIO_OUTPUT_FLAG_FAST);
     }
+#if defined(MTK_LOW_POWER)
+    // Music prefer deepbuffer
+    if (streamType == AUDIO_STREAM_MUSIC && outputFlags == AUDIO_OUTPUT_FLAG_NONE) {
+        outputFlags = AUDIO_OUTPUT_FLAG_DEEP_BUFFER;
+    }
+#endif // MTK_LOW_POWER
 
     // Check if requested flags are compatible with output stream flags
     if ((*flags & outputFlags) != *flags) {
@@ -2248,6 +2303,10 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
         }
         mTracks.add(track);
 
+        if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+            track->mFlagsOriginal = flagsOriginal;
+        } // MTK_AUDIOMIXER_ENABLE_DRC
+
         sp<EffectChain> chain = getEffectChain_l(sessionId);
         if (chain != 0) {
             ALOGV("createTrack_l() setting main buffer %p", chain->inBuffer());
@@ -2375,13 +2434,21 @@ status_t AudioFlinger::PlaybackThread::addTrack_l(const sp<Track>& track)
         if (track->isExternalTrack()) {
             TrackBase::track_state state = track->mState;
             mLock.unlock();
-            status = AudioSystem::startOutput(track->portId());
+            if (!FeatureOption::MTK_HIFIAUDIO_SUPPORT) {
+                status = AudioSystem::startOutput(track->portId());
+            } else {
+                status = AudioSystem::startOutputSamplerate(track->portId(), track->mSampleRate);
+            }
             mLock.lock();
             // abort track was stopped/paused while we released the lock
             if (state != track->mState) {
                 if (status == NO_ERROR) {
                     mLock.unlock();
-                    AudioSystem::stopOutput(track->portId());
+                    if (!FeatureOption::MTK_HIFIAUDIO_SUPPORT) {
+                        AudioSystem::stopOutput(track->portId());
+                    } else {
+                        AudioSystem::stopOutputSamplerate(track->portId(), track->mSampleRate);
+                    }
                     mLock.lock();
                 }
                 return INVALID_OPERATION;
@@ -2439,8 +2506,20 @@ status_t AudioFlinger::PlaybackThread::addTrack_l(const sp<Track>& track)
                     track->sessionId());
             chain->incActiveTrackCnt();
         }
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03762573 : music seek
+          if (mFlushShareBuffer.indexOfKey(track->id()) < 0) {
+              mFlushShareBuffer.add(track->id(), false);
+          } else {
+              mFlushShareBuffer.replaceValueFor(track->id(), false);
+          }
+#endif
 
         status = NO_ERROR;
+    } else {
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+        // ALPS04918715 when start, always reset mRetryCount
+        track->mRetryCount = kMaxTrackStartupRetries;
+#endif
     }
 
     onAddNewTrack_l();
@@ -2614,6 +2693,16 @@ void AudioFlinger::PlaybackThread::readOutputParameters_l()
                 mFrameCount);
     }
 
+    if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        if (mType == DUPLICATING) {
+            if (mFrameCount % 512) {
+                MTK_ALOGI("Change Duplicated thread framecount frome %zu to %zu for DRC",
+                    mFrameCount, ((size_t)(mFrameCount / 512) + 1) * 512);
+                mFrameCount = ((size_t)(mFrameCount / 512) + 1) * 512;
+            }
+        }
+    } // MTK_AUDIOMIXER_ENABLE_DRC
+
     if (mOutput->flags & AUDIO_OUTPUT_FLAG_NON_BLOCKING) {
         if (mOutput->stream->setCallback(this) == OK) {
             mUseAsyncWrite = true;
@@ -2656,8 +2745,18 @@ void AudioFlinger::PlaybackThread::readOutputParameters_l()
 
     // Calculate size of normal sink buffer relative to the HAL output buffer size
     double multiplier = 1.0;
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03781464
+    if ((mType == MIXER  || mType == DUPLICATING) && (kUseFastMixer == FastMixer_Static ||
+            kUseFastMixer == FastMixer_Dynamic)
+#else
     if (mType == MIXER && (kUseFastMixer == FastMixer_Static ||
-            kUseFastMixer == FastMixer_Dynamic)) {
+            kUseFastMixer == FastMixer_Dynamic)
+#endif
+#if defined(MTK_LOW_LATENCY)
+            && (mOutput->flags & AUDIO_OUTPUT_FLAG_FAST)
+#endif // MTK_LOW_LATENCY
+        ) {
+
         size_t minNormalFrameCount = (kMinNormalSinkBufferSizeMs * mSampleRate) / 1000;
         size_t maxNormalFrameCount = (kMaxNormalSinkBufferSizeMs * mSampleRate) / 1000;
 
@@ -2681,6 +2780,14 @@ void AudioFlinger::PlaybackThread::readOutputParameters_l()
         }
     }
     mNormalFrameCount = multiplier * mFrameCount;
+
+    if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        if ((mOutput->flags & AUDIO_OUTPUT_FLAG_FAST) && (mOutput->flags & AUDIO_OUTPUT_FLAG_PRIMARY)) {
+            mNormalFrameCount = ceil((mNormalFrameCount + 0.0) / 512) * 512;
+            MTK_ALOGI("%s, mNormalFrameCount %zu", __FUNCTION__, mNormalFrameCount);
+        }
+    } // MTK_AUDIOMIXER_ENABLE_DRC
+
     // round up to nearest 16 frames to satisfy AudioMixer
     if (mType == MIXER || mType == DUPLICATING) {
         mNormalFrameCount = (mNormalFrameCount + 15) & ~15;
@@ -2916,6 +3023,13 @@ ssize_t AudioFlinger::PlaybackThread::threadLoop_write()
     ssize_t bytesWritten;
     const size_t offset = mCurrentWriteLength - mBytesRemaining;
 
+#if defined(MTK_LATENCY_DETECT_PULSE)
+    if (AudioDetectPulse::getDetectPulse()) {
+        AudioDetectPulse::doDetectPulse(TAG_NORMAL_MIXER, 800, 0, (void *)((char *)mSinkBuffer + offset),
+                                        mBytesRemaining / mFrameSize, mFormat, mChannelCount, mSampleRate);
+    }
+#endif // MTK_LATENCY_DETECT_PULSE
+
     // If an NBAIO sink is present, use it to write the normal mixer's submix
     if (mNormalSink != 0) {
 
@@ -2932,7 +3046,29 @@ ssize_t AudioFlinger::PlaybackThread::threadLoop_write()
                         (pipe->maxFrames() * 7) / 8 : mNormalFrameCount * 2);
             }
         }
+#if defined(MTK_AUDIO_DEBUG)
+        nsecs_t t_before = 0;
+        if (!(AudioFlinger::mScreenState & 1)) {
+            t_before = systemTime();
+        }
+#endif
         ssize_t framesWritten = mNormalSink->write((char *)mSinkBuffer + offset, count);
+#if defined(MTK_AUDIO_DEBUG)
+        if (!(AudioFlinger::mScreenState & 1)) { // when screnn in on
+            nsecs_t t_after = systemTime();
+            nsecs_t delta = t_after - t_before;
+            uint32_t loopMs = delta / 1000000;
+            if (loopMs > mHalfBufferMs * 2 *1.5) {
+                MTK_ALOGD("write() process %d ms, mBufferMs %d", loopMs, mHalfBufferMs * 2);
+            }
+        }
+        if (AudioDump::getProperty(AudioDump::PROP_AUDIO_DUMP_MIXER)) {
+            String8 fileName;
+            fileName = String8::format("%s.%d.pid%d.tid%d", AudioDump::af_mixer_write_pcm, mId, getpid(), gettid());
+            AudioDump::threadDump(fileName.string(), (char*)mSinkBuffer + offset, framesWritten * mFrameSize,
+                mFormat, mSampleRate, mChannelCount);
+        }
+#endif // MTK_AUDIO_DEBUG
         ATRACE_END();
         if (framesWritten > 0) {
             bytesWritten = framesWritten * mFrameSize;
@@ -2955,10 +3091,21 @@ ssize_t AudioFlinger::PlaybackThread::threadLoop_write()
         }
         // FIXME We should have an implementation of timestamps for direct output threads.
         // They are used e.g for multichannel PCM playback over HDMI.
+#if defined(MTK_AUDIO_DEBUG)
+        if (AudioDump::getProperty(AudioDump::PROP_AUDIO_DUMP_OFFLOAD)) {
+            AudioDump::threadDump(AudioDump::af_offload_write_raw, (char*)mSinkBuffer + offset, mBytesRemaining,
+                mFormat, mSampleRate, mChannelCount );
+        }
+#endif // MTK_AUDIO_DEBUG
         bytesWritten = mOutput->write((char *)mSinkBuffer + offset, mBytesRemaining);
 
+#if !defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
         if (mUseAsyncWrite &&
-                ((bytesWritten < 0) || (bytesWritten == (ssize_t)mBytesRemaining))) {
+                ((bytesWritten < 0) || (bytesWritten == (ssize_t)mBytesRemaining)))
+#else
+        if (mUseAsyncWrite && ((bytesWritten < 0)))
+#endif
+        {
             // do not wait for async callback in case of error of full write
             mWriteAckSequence &= ~1;
             ALOG_ASSERT(mCallbackThread != 0);
@@ -3034,9 +3181,20 @@ void AudioFlinger::PlaybackThread::cacheParameters_l()
     // truncating audio when going to standby.
     mStandbyDelayNs = AudioFlinger::mStandbyTimeInNsecs;
     if ((mOutDevice & AUDIO_DEVICE_OUT_ALL_A2DP) != 0) {
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03649396 bt stop music
+        mStandbyDelayNs = kDefaultA2dpStandbyTimeInNsecs;
+
+        // ALPS04100750: adjust a2dp standby time by property
+        int64_t int_val = property_get_int64("persist.vendor.bluetooth.a2dpstandbytime", -1);
+        if (int_val >= 0) {
+            mStandbyDelayNs = milliseconds(int_val);
+            MTK_ALOGI("Using %lld mSec as a2dp standby time", (long long)int_val);
+        }
+#else
         if (mStandbyDelayNs < kDefaultStandbyTimeInNsecs) {
             mStandbyDelayNs = kDefaultStandbyTimeInNsecs;
         }
+#endif
     }
 }
 
@@ -3256,6 +3414,12 @@ bool AudioFlinger::PlaybackThread::threadLoop()
 
     checkSilentMode_l();
 
+    if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        MTK_ALOGD("%s, MtkAudioLoud_InitParser()+", __FUNCTION__);
+        MtkAudioLoud_InitParser();
+        MTK_ALOGD("%s, MtkAudioLoud_InitParser()-", __FUNCTION__);
+    } // MTK_AUDIOMIXER_ENABLE_DRC
+
     // DIRECT and OFFLOAD threads should reset frame count to zero on stop/flush
     // TODO: add confirmation checks:
     // 1) DIRECT threads and linear PCM format really resets to 0?
@@ -3327,6 +3491,19 @@ bool AudioFlinger::PlaybackThread::threadLoop()
             Mutex::Autolock _l(mLock);
 
             processConfigEvents_l();
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03762573 : music seek
+            for (const sp<Track> &track : mActiveTracks) {
+                if (mFlushShareBuffer.indexOfKey(track->id()) >= 0) {
+                    if (mFlushShareBuffer.valueFor(track->id()) == true) {
+                        ALOGD("enforce flush(%d)", (int)track->id());
+                        ServerProxy::Buffer buffer;
+                        buffer.mFrameCount = 1;
+                        (void) track->mAudioTrackServerProxy->obtainBuffer(&buffer, true /*ackFlush*/);
+                        mFlushShareBuffer.replaceValueFor(track->id(), false);
+                    }
+                }
+            }
+#endif
 
             // See comment at declaration of logString for why this is done under mLock
             if (logString != NULL) {
@@ -3520,9 +3697,9 @@ bool AudioFlinger::PlaybackThread::threadLoop()
 
                     releaseWakeLock_l();
                     // wait until we have something to do...
-                    ALOGV("%s going to sleep", myName.string());
+                    MTK_ALOGV("%s going to sleep", myName.string());
                     mWaitWorkCV.wait(mLock);
-                    ALOGV("%s waking up", myName.string());
+                    MTK_ALOGV("%s waking up", myName.string());
                     acquireWakeLock_l();
 
                     mMixerStatus = MIXER_IDLE;
@@ -3575,10 +3752,21 @@ bool AudioFlinger::PlaybackThread::threadLoop()
         if (mBytesRemaining == 0) {
             mCurrentWriteLength = 0;
             if (mMixerStatus == MIXER_TRACKS_READY) {
+#if defined(MTK_AUDIO_DEBUG)
+                mWriteMutedData = false;
+                if (mWriteMutedDataCount > 0) {
+                    MTK_ALOGD("%p:threadLoop_write write data to hw, mixerStatus %d, muted count %d",
+                        this, mMixerStatus, mWriteMutedDataCount);
+                    mWriteMutedDataCount = 0;
+                }
+#endif // MTK_AUDIO_DEBUG
                 // threadLoop_mix() sets mCurrentWriteLength
                 threadLoop_mix();
             } else if ((mMixerStatus != MIXER_DRAIN_TRACK)
                         && (mMixerStatus != MIXER_DRAIN_ALL)) {
+#if defined(MTK_AUDIO_DEBUG)
+                mWriteMutedData = true;
+#endif // MTK_AUDIO_DEBUG
                 // threadLoop_sleepTime sets mSleepTimeUs to 0 if data
                 // must be written to HAL
                 threadLoop_sleepTime();
@@ -3719,6 +3907,15 @@ bool AudioFlinger::PlaybackThread::threadLoop()
                 // writePeriodNs is updated >= 0 when ret > 0.
                 int64_t writePeriodNs = -1;
                 if (mBytesRemaining) {
+#if defined(MTK_AUDIO_DEBUG)
+                    if (mWriteMutedData) {
+                        if (mWriteMutedDataCount == 0) {
+                            MTK_ALOGD("%p:threadLoop_write write muted data to hw, mixerStatus %d start",
+                                this, mMixerStatus);
+                        }
+                        mWriteMutedDataCount++;
+                    }
+#endif // MTK_AUDIO_DEBUG
                     // FIXME rewrite to reduce number of system calls
                     const int64_t lastIoBeginNs = systemTime();
                     ret = threadLoop_write();
@@ -3777,6 +3974,9 @@ bool AudioFlinger::PlaybackThread::threadLoop()
 
                     if (mThreadThrottle
                             && mMixerStatus == MIXER_TRACKS_READY // we are mixing (active tracks)
+#if defined(MTK_LOW_POWER)
+                            && (!(AudioFlinger::mScreenState & 1)) // we need low power when screen is off
+#endif // MTK_LOW_POWER
                             && writePeriodNs > 0) {               // we have write period info
                         // Limit MixerThread data processing to no more than twice the
                         // expected processing rate.
@@ -3888,7 +4088,7 @@ bool AudioFlinger::PlaybackThread::threadLoop()
 
     releaseWakeLock();
 
-    ALOGV("Thread %p type %d exiting", this, mType);
+    MTK_ALOGV("Thread %p type %d exiting", this, mType);
     return false;
 }
 
@@ -3897,7 +4097,12 @@ void AudioFlinger::PlaybackThread::removeTracks_l(const Vector< sp<Track> >& tra
 {
     for (const auto& track : tracksToRemove) {
         mActiveTracks.remove(track);
-        ALOGV("%s(%d): removing track on session %d", __func__, track->id(), track->sessionId());
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03762573 : music seek
+        if (mFlushShareBuffer.indexOfKey(track->id()) >= 0) {
+            mFlushShareBuffer.removeItem(track->id());
+        }
+#endif
+        MTK_ALOGD("%s(%d): removing track on session %d", __func__, track->id(), track->sessionId());
         sp<EffectChain> chain = getEffectChain_l(track->sessionId());
         if (chain != 0) {
             ALOGV("%s(%d): stopping track on chain %p for session Id: %d",
@@ -3907,7 +4112,11 @@ void AudioFlinger::PlaybackThread::removeTracks_l(const Vector< sp<Track> >& tra
         // If an external client track, inform APM we're no longer active, and remove if needed.
         // We do this under lock so that the state is consistent if the Track is destroyed.
         if (track->isExternalTrack()) {
-            AudioSystem::stopOutput(track->portId());
+            if (!FeatureOption::MTK_HIFIAUDIO_SUPPORT) {
+                AudioSystem::stopOutput(track->portId());
+            } else {
+                AudioSystem::stopOutputSamplerate(track->portId(), track->mSampleRate);
+            }
             if (track->isTerminated()) {
                 AudioSystem::releaseOutput(track->portId());
             }
@@ -3916,6 +4125,11 @@ void AudioFlinger::PlaybackThread::removeTracks_l(const Vector< sp<Track> >& tra
             // remove from our tracks vector
             removeTrack_l(track);
         }
+// <MTK_AUDIOMIXER_ENABLE_DRC
+        else if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) { // inactive but not terminated
+            releaseTrackDrc_l(track->id());
+        }
+// <MTK_AUDIOMIXER_ENABLE_DRC
         if ((track->channelMask() & AUDIO_CHANNEL_HAPTIC_ALL) != AUDIO_CHANNEL_NONE
                 && mHapticChannelCount > 0) {
             mLock.unlock();
@@ -4015,6 +4229,17 @@ status_t AudioFlinger::PlaybackThread::createAudioPatch_l(const struct audio_pat
     bool configChanged = (mPrevOutDevice != type) || (mDeviceId != sinkPortId);
     mOutDevice = type;
     mPatch = *patch;
+
+    if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        unsigned int dDeviceIndex;
+        audio_devices_t eOutDeviceList = AUDIO_DEVICE_NONE;
+        for (dDeviceIndex = 0; dDeviceIndex < patch->num_sinks; dDeviceIndex++) {
+            eOutDeviceList |= patch->sinks[dDeviceIndex].ext.device.type;
+        }
+        if (!(eOutDeviceList & AUDIO_DEVICE_BIT_IN) && (eOutDeviceList != AUDIO_DEVICE_NONE)) {
+            mOutputDevice = eOutDeviceList;
+        }
+    } // MTK_AUDIOMIXER_ENABLE_DRC
 
     if (mOutput->audioHwDev->supportsAudioPatches()) {
         sp<DeviceHalInterface> hwDevice = mOutput->audioHwDev->hwDevice();
@@ -4116,8 +4341,8 @@ AudioFlinger::MixerThread::MixerThread(const sp<AudioFlinger>& audioFlinger, Aud
         // mNormalSink below
 {
     setMasterBalance(audioFlinger->getMasterBalance_l());
-    ALOGV("MixerThread() id=%d device=%#x type=%d", id, device, type);
-    ALOGV("mSampleRate=%u, mChannelMask=%#x, mChannelCount=%u, mFormat=%#x, mFrameSize=%zu, "
+    MTK_ALOGV("MixerThread() id=%d device=%#x type=%d", id, device, type);
+    MTK_ALOGV("mSampleRate=%u, mChannelMask=%#x, mChannelCount=%u, mFormat=%#x, mFrameSize=%zu, "
             "mFrameCount=%zu, mNormalFrameCount=%zu",
             mSampleRate, mChannelMask, mChannelCount, mFormat, mFrameSize, mFrameCount,
             mNormalFrameCount);
@@ -4343,11 +4568,21 @@ ssize_t AudioFlinger::MixerThread::threadLoop_write()
                 (kUseFastMixer != FastMixer_Dynamic || state->mTrackMask > 1)) {
             if (state->mCommand == FastMixerState::COLD_IDLE) {
 
+#if defined(MTK_AUDIO_DEBUG)
+                nsecs_t t_before = 0;
+                t_before = systemTime();
+#endif
                 // FIXME workaround for first HAL write being CPU bound on some devices
                 ATRACE_BEGIN("write");
                 mOutput->write((char *)mSinkBuffer, 0);
                 ATRACE_END();
 
+#if defined(MTK_AUDIO_DEBUG)
+                nsecs_t t_after = systemTime();
+                nsecs_t delta = t_after - t_before;
+                uint32_t writeMs = delta / 1000000;
+                MTK_ALOGD("stream out write(0) process %d ms", writeMs);
+#endif
                 int32_t old = android_atomic_inc(&mFastMixerFutex);
                 if (old == -1) {
                     (void) syscall(__NR_futex, &mFastMixerFutex, FUTEX_WAKE_PRIVATE, 1);
@@ -4432,7 +4667,7 @@ bool AudioFlinger::PlaybackThread::waitingAsyncCallback()
 // shared by MIXER and DIRECT, overridden by DUPLICATING
 void AudioFlinger::PlaybackThread::threadLoop_standby()
 {
-    ALOGV("Audio hardware entering standby, mixer %p, suspend count %d", this, mSuspended);
+    MTK_ALOGV("Audio hardware entering standby, mixer %p, suspend count %d", this, mSuspended);
     mOutput->standby();
     if (mUseAsyncWrite != 0) {
         // discard any pending drain or write ack by incrementing sequence
@@ -4463,6 +4698,17 @@ void AudioFlinger::MixerThread::threadLoop_mix()
     // mix buffers...
     mAudioMixer->process();
     mCurrentWriteLength = mSinkBufferSize;
+#if defined(MTK_AUDIO_DEBUG)
+    if (mMixerBufferValid) {
+        if (AudioDump::getProperty(AudioDump::PROP_AUDIO_DUMP_MIXER)) {
+            String8 fileName;
+            fileName = String8::format("%s.%d.pid%d.tid%d", AudioDump::af_mixer_pcm, mId, getpid(), gettid());
+            AudioDump::threadDump(fileName.string(), mMixerBuffer, mNormalFrameCount * mChannelCount
+                * audio_bytes_per_sample(mMixerBufferFormat), mMixerBufferFormat, mSampleRate,
+                mChannelCount);
+        }
+    }
+#endif // MTK_AUDIO_DEBUG
     // increase sleep time progressively when application underrun condition clears.
     // Only increase sleep time if the mixer is ready for two consecutive times to avoid
     // that a steady state of alternating ready/not ready conditions keeps the sleep time
@@ -4787,6 +5033,9 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                     // because we're about to decrement the last sp<> on those tracks.
                     block = FastMixerStateQueue::BLOCK_UNTIL_ACKED;
                 } else {
+#if defined(MTK_LOW_LATENCY)
+                    // do not assert for FastTrack may receive stop before being added to active list.
+#else
                     // ALOGW rather than LOG_ALWAYS_FATAL because it seems there are cases where an
                     // AudioTrack may start (which may not be with a start() but with a write()
                     // after underrun) and immediately paused or released.  In that case the
@@ -4797,6 +5046,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                             j, track->mState, state->mTrackMask, recentUnderruns,
                             track->sharedBuffer() != 0);
                     // Since the FastMixer state already has the track inactive, do nothing here.
+#endif // MTK_LOW_LATENCY
                 }
                 tracksToRemove->add(track);
                 // Avoids a misleading display in dumpsys
@@ -4805,6 +5055,11 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
             if (fastTrack->mHapticPlaybackEnabled != track->getHapticPlaybackEnabled()) {
                 fastTrack->mHapticPlaybackEnabled = track->getHapticPlaybackEnabled();
                 didModify = true;
+            }
+
+            if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) { // ALPS04408933 low latency support drc
+                fastTrack->mStreamType = track->streamType();
+                fastTrack->mOutputDevice = mOutputDevice;
             }
             continue;
         }
@@ -4868,7 +5123,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
         if ((framesReady >= minFrames) && track->isReady() &&
                 !track->isPaused() && !track->isTerminated())
         {
-            ALOGVV("track(%d) s=%08x [OK] on thread %p", trackId, cblk->mServer, this);
+            MTK_ALOGV("track(%d) s=%08x [OK] on thread %p", trackId, cblk->mServer, this);
 
             mixedTracks++;
 
@@ -4904,6 +5159,13 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                     }
                 }
                 mAudioMixer->setParameter(trackId, AudioMixer::RESAMPLE, AudioMixer::RESET, NULL);
+
+                if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+                    if (mOutputDevice & AUDIO_DEVICE_OUT_SPEAKER) { // ALPS04408933 low latency support drc
+                        mAudioMixer->setParameter(trackId, AudioMixer::DRC, AudioMixer::RESET, NULL);
+                    }
+                } // MTK_AUDIOMIXER_ENABLE_DRC
+
                 mLeftVolFloat = -1.0;
             // FIXME should not make a decision based on mServer
             } else if (cblk->mServer != 0) {
@@ -4911,7 +5173,13 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 // do not apply ramp
                 param = AudioMixer::RAMP_VOLUME;
             }
-
+            if (FeatureOption::MTK_HIFIAUDIO_SUPPORT) {
+                if (track->noRamp == true) {
+                    ALOGD("set Track %d noramp", track->id());
+                    param = AudioMixer::VOLUME;
+                    track->noRamp =false;
+                }
+            }
             // compute volume for this track
             uint32_t vl, vr;       // in U8.24 integer format
             float vlf, vrf, vaf;   // in [0.0, 1.0] float format
@@ -4929,6 +5197,13 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 vlf = vrf = vaf = 0.;
                 if (track->isPausing()) {
                     track->setPaused();
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03762573 : music seek
+                    Mutex::Autolock _l(track->mPauseCondLock);
+                    if (track->mPauseFlag) {
+                        //ALOGD("pause signal - [OK] on thread");
+                        track->mPauseFlagCanRelease = true;
+                    }
+#endif
                 }
             } else {
                 gain_minifloat_packed_t vlr = proxy->getVolumeLR();
@@ -4987,7 +5262,10 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 v = mStreamTypes[track->streamType()].mute ? 0.0f : v;
                 if (v != mLeftVolFloat) {
                     status_t result = mOutput->stream->setVolume(v, v);
+#if !defined(MTK_AUDIO)
+                    // ALPS04234878: VOIP_RX return INVALID_OPERATION
                     ALOGE_IF(result != OK, "Error when setting output stream volume: %d", result);
+#endif
                     if (result == OK) {
                         mLeftVolFloat = v;
                     }
@@ -5089,6 +5367,46 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 AudioMixer::TRACK,
                 AudioMixer::HAPTIC_INTENSITY, (void *)(uintptr_t)track->getHapticIntensity());
 
+// <MTK_AUDIOMIXER_ENABLE_DRC
+            if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+                mAudioMixer->setParameter(
+                    trackId,
+                    AudioMixer::TRACK,
+                    AudioMixer::STREAM_TYPE, (void *)track->streamType());
+
+                mAudioMixer->setParameter( // ALPS04408933 low latency support drc
+                    trackId,
+                    AudioMixer::TRACK,
+                    AudioMixer::FLAGS, (void *)track->mFlagsOriginal);
+
+                if (mUpdateCustomSceneParam) {
+                    mUpdateCustomSceneParam = false;
+                    mAudioMixer->setParameter(
+                        trackId,
+                        AudioMixer::DRC,
+                        AudioMixer::UPDATE_SCENE, (void *)mCustomScene.string());
+                }
+                mAudioMixer->setParameter(
+                    trackId,
+                    AudioMixer::DRC,
+                    AudioMixer::DEVICE, (void *)(uintptr_t)mOutputDevice);
+                if (mUpdateACFHCFParam) {
+                    mUpdateACFHCFParam = false;
+                    mAudioMixer->setParameter(
+                        trackId,
+                        AudioMixer::DRC,
+                        AudioMixer::UPDATE_ACFHCF, (void *)NULL);
+                }
+                if (track->mResetDrc) {
+                    track->mResetDrc = false;
+                    mAudioMixer->setParameter(
+                        trackId,
+                        AudioMixer::DRC,
+                        AudioMixer::RESET, (void *)NULL);
+                }
+            }
+// MTK_AUDIOMIXER_ENABLE_DRC>
+
             // reset retry count
             track->mRetryCount = kMaxTrackRetries;
 
@@ -5102,7 +5420,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
         } else {
             size_t underrunFrames = 0;
             if (framesReady < desiredFrames && !track->isStopped() && !track->isPaused()) {
-                ALOGV("track(%d) underrun,  framesReady(%zu) < framesDesired(%zd)",
+                MTK_ALOGV("track(%d) underrun,  framesReady(%zu) < framesDesired(%zd)",
                         trackId, framesReady, desiredFrames);
                 underrunFrames = desiredFrames;
             }
@@ -5115,7 +5433,17 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 chain->clearInputBuffer();
             }
 
-            ALOGVV("track(%d) s=%08x [NOT READY] on thread %p", trackId, cblk->mServer, this);
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03762573 : music seek
+            {
+                Mutex::Autolock _l(track->mPauseCondLock);
+                if (track->mPauseFlag) {
+                    ALOGD("pause signal - [NOT READY] on thread");
+                    track->mPauseFlag = false;
+                    track->mPauseCond.signal();
+                }
+            }
+#endif
+            MTK_ALOGV("track(%d) s=%08x [NOT READY] on thread %p", trackId, cblk->mServer, this);
             if ((track->sharedBuffer() != 0) || track->isTerminated() ||
                     track->isStopped() || track->isPaused()) {
                 // We have consumed all the buffers of this track.
@@ -5343,6 +5671,12 @@ bool AudioFlinger::MixerThread::checkForNewParameter_l(const String8& keyValuePa
         }
     }
     if (param.getInt(String8(AudioParameter::keyRouting), value) == NO_ERROR) {
+        if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+            if (!(value & AUDIO_DEVICE_BIT_IN) && (value != AUDIO_DEVICE_NONE)) {
+                mOutputDevice = value;
+            }
+        } // MTK_AUDIOMIXER_ENABLE_DRC
+
 #ifdef ADD_BATTERY_DATA
         // when changing the audio output device, call addBatteryData to notify
         // the change
@@ -5378,15 +5712,50 @@ bool AudioFlinger::MixerThread::checkForNewParameter_l(const String8& keyValuePa
         }
     }
 
+    if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        if (param.getInt(String8("AudioFlinger_routing"), value) == NO_ERROR) {
+            if (!(value & AUDIO_DEVICE_BIT_IN) && (value != AUDIO_DEVICE_NONE)) {
+                mOutputDevice = value;
+            }
+            return NO_ERROR;
+        }
+        if (param.getInt(String8("UpdateACFHCFParameters"), value) == NO_ERROR) {
+            if (value == 3 || value == 4) {
+               DRCParse(DRC_UPDATE_PARAM, true, String8("")); // ALPS04408933 low latency support drc
+            }
+        }
+        // ALPS04408933 low latency support drc
+        if (param.getInt(String8("SetBesLoudnessStatus"), value) == NO_ERROR) {
+            DRCParse(DRC_ENALBLE, value, String8(""));
+        }
+        String8 strValue;
+        if (param.get(String8("SetAudioCustomScene"), strValue) == NO_ERROR) {
+            DRCParse(DRC_CUSTOM_SCENE, true, strValue); // ALPS04408933 low latency support drc
+            return NO_ERROR;
+        }
+    } // MTK_AUDIOMIXER_ENABLE_DRC
+
     if (status == NO_ERROR) {
         status = mOutput->stream->setParameters(keyValuePair);
         if (!mStandby && status == INVALID_OPERATION) {
+#if defined(MTK_LOW_LATENCY)
+            // Also standy fastmixer
+            threadLoop_standby();
+#else
             mOutput->standby();
             mStandby = true;
+#endif // MTK_LOW_LATENCY
             mBytesWritten = 0;
             status = mOutput->stream->setParameters(keyValuePair);
         }
         if (status == NO_ERROR && reconfig) {
+#if defined(MTK_AUDIO)
+            // ALPS04678076 keep old mSinkBuffer value for hifi audio
+            void* oldmSinkBuffer = mSinkBuffer;
+#if defined(MTK_HIFIAUDIO_SUPPORT)
+            uint32_t oldSampleRate = mSampleRate;
+#endif
+#endif
             readOutputParameters_l();
             delete mAudioMixer;
             mAudioMixer = new AudioMixer(mNormalFrameCount, mSampleRate);
@@ -5402,7 +5771,28 @@ bool AudioFlinger::MixerThread::checkForNewParameter_l(const String8& keyValuePa
                         " mask %#x, format %#x, sessionId %d",
                         __func__,
                         trackId, track->mChannelMask, track->mFormat, track->mSessionId);
+                if (FeatureOption::MTK_HIFIAUDIO_SUPPORT) {
+                      track->noRamp = true;
+                      if (oldmSinkBuffer == track->mainBuffer()) {
+                        // ALPS04678076 update track's main buffer for mSinkBuffer is reallocated
+                        // in readOutputParameters_l
+                          track->setMainBuffer(reinterpret_cast<effect_buffer_t*>(mSinkBuffer));
+                      }
+                      MTK_ALOGD("trackId %d,delete audiomixer set no ramp mainBuffer %p", trackId, track->mainBuffer());
+                  }
             }
+#if defined(MTK_HIFIAUDIO_SUPPORT)
+            if (oldSampleRate > mSampleRate) {
+                size_t size = mTracks.size();
+                for (size_t i = 0; i < size; i++) {
+                    sp<Track> t = mTracks[i];
+                    if (t->isExternalTrack()) {
+                        ALOGD("invalidate Track %d for bigger buffer size,oldSampleRate %u, mSampleRate %u ", t->name(), oldSampleRate, mSampleRate);
+                        t->invalidate();
+                    }
+                }
+            }
+#endif
             sendIoConfigEvent_l(AUDIO_OUTPUT_CONFIG_CHANGED);
         }
     }
@@ -6323,7 +6713,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::OffloadThread::prepareTr
                         mOffloadUnderrunPosition = position;
                     }
                     if (ret == NO_ERROR) {
-                        ALOGVV("underrun counter, running(%d): %lld vs %lld", running,
+                        MTK_ALOGD("underrun counter, running(%d): %lld vs %lld", running,
                                 (long long)position, (long long)mOffloadUnderrunPosition);
                     }
                     if (running) { // still running, give us more time.
@@ -6417,12 +6807,16 @@ void AudioFlinger::OffloadThread::invalidateTracks(audio_stream_type_t streamTyp
 // ----------------------------------------------------------------------------
 
 AudioFlinger::DuplicatingThread::DuplicatingThread(const sp<AudioFlinger>& audioFlinger,
-        AudioFlinger::MixerThread* mainThread, audio_io_handle_t id, bool systemReady)
+        AudioFlinger::MixerThread* mainThread, audio_io_handle_t id, bool systemReady, uint32_t latency)
     :   MixerThread(audioFlinger, mainThread->getOutput(), id, mainThread->outDevice(),
                     systemReady, DUPLICATING),
         mWaitTimeMs(UINT_MAX)
 {
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
+    addOutputTrack(mainThread, latency);
+#else
     addOutputTrack(mainThread);
+#endif
 }
 
 AudioFlinger::DuplicatingThread::~DuplicatingThread()
@@ -6537,14 +6931,31 @@ void AudioFlinger::DuplicatingThread::clearOutputTracks()
     outputTracks.clear();
 }
 
-void AudioFlinger::DuplicatingThread::addOutputTrack(MixerThread *thread)
+void AudioFlinger::DuplicatingThread::addOutputTrack(MixerThread *thread, uint32_t latency)
 {
     Mutex::Autolock _l(mLock);
     // The downstream MixerThread consumes thread->frameCount() amount of frames per mix pass.
     // Adjust for thread->sampleRate() to determine minimum buffer frame count.
     // Then triple buffer because Threads do not run synchronously and may not be clock locked.
+
+#if !defined(MTK_AUDIO_FIX_DEFAULT_DEFECT)
     const size_t frameCount =
             3 * sourceFramesNeeded(mSampleRate, thread->frameCount(), thread->sampleRate());
+#else
+    size_t frameCount =
+            3 * sourceFramesNeeded(mSampleRate, thread->frameCount(), thread->sampleRate());
+
+    uint32_t minBufCount = latency / ((1000 * mNormalFrameCount) / mSampleRate);
+    if (minBufCount < 2) {
+        minBufCount = 2;
+    }
+
+    size_t minFrameCount = mNormalFrameCount * minBufCount;
+    ALOGD("%s, latency %u, frameCount %zu, minFrameCount %zu", __FUNCTION__, latency, frameCount, minFrameCount);
+    if (frameCount < minFrameCount) {
+        frameCount = minFrameCount;
+    }
+#endif
     // TODO: Consider asynchronous sample rate conversion to handle clock disparity
     // from different OutputTracks and their associated MixerThreads (e.g. one may
     // nearly empty and the other may be dropping data).
@@ -6591,7 +7002,11 @@ void AudioFlinger::DuplicatingThread::updateWaitTime_l()
     for (size_t i = 0; i < mOutputTracks.size(); i++) {
         sp<ThreadBase> strong = mOutputTracks[i]->thread().promote();
         if (strong != 0) {
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS03781464
+            uint32_t waitTimeMs = (strong->frameCount() * 1000) / strong->sampleRate();
+#else
             uint32_t waitTimeMs = (strong->frameCount() * 2 * 1000) / strong->sampleRate();
+#endif
             if (waitTimeMs < mWaitTimeMs) {
                 mWaitTimeMs = waitTimeMs;
             }
@@ -7118,6 +7533,23 @@ reacquire_wakelock:
             }
         }
 
+#if defined(MTK_AUDIO_DEBUG)
+            if (AudioDump::getProperty(AudioDump::PROP_AUDIO_DUMP_RECORD)) {
+                String8 fileName;
+                fileName = String8::format("%s.pid%d.tid%d", AudioDump::af_record_read_pcm, getpid(), gettid());
+                AudioDump::threadDump(fileName.string(), (uint8_t*)mRsmpInBuffer + rear * mFrameSize, framesRead * mFrameSize,
+                    mFormat, mSampleRate, mChannelCount);
+            }
+#endif // MTK_AUDIO_DEBUG
+
+#if defined(MTK_LATENCY_DETECT_PULSE)
+        if (AudioDetectPulse::getDetectPulse()) {
+            AudioDetectPulse::doDetectPulse(TAG_NORMAL_CATTURE, 800, 0,
+                                            (void *)((uint8_t*)mRsmpInBuffer + rear * mFrameSize),
+                                            mBufferSize / mFrameSize, mFormat, mChannelCount, mSampleRate);
+        }
+#endif // MTK_LATENCY_DETECT_PULSE
+
         const int64_t lastIoEndNs = systemTime(); // end IO timing
 
         // Update server timestamp with server stats
@@ -7192,7 +7624,16 @@ reacquire_wakelock:
                         (framesRead - part1) * mFrameSize);
             }
         }
+
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS04523881 : ubsan add overflow
+        {
+            int32_t frames = (int32_t)framesRead;
+            mRsmpInRear = audio_utils::safe_add_overflow(mRsmpInRear, frames);
+            rear = mRsmpInRear;
+        }
+#else
         rear = mRsmpInRear += framesRead;
+#endif
 
         size = activeTracks.size();
 
@@ -7274,12 +7715,20 @@ reacquire_wakelock:
                 }
 
                 if (activeTrack->mFramesToDrop == 0) {
+#if defined(MTK_AUDIO_DEBUG)
+                    if (AudioDump::getProperty(AudioDump::PROP_AUDIO_DUMP_RECORD)) {
+                        String8 fileName;
+                        fileName = String8::format("%s.%d.pid%d.tid%d", AudioDump::af_record_convert_pcm, activeTrack->portId(), getpid(), gettid());
+                        AudioDump::threadDump(fileName.string(), activeTrack->mSink.raw, framesOut * mFrameSize,
+                            activeTrack->format(), activeTrack->sampleRate(), activeTrack->channelCount());
+                    }
+#endif // MTK_AUDIO_DEBUG
                     if (framesOut > 0) {
                         activeTrack->mSink.frameCount = framesOut;
                         // Sanitize before releasing if the track has no access to the source data
                         // An idle UID receives silence from non virtual devices until active
                         if (activeTrack->isSilenced()) {
-                            memset(activeTrack->mSink.raw, 0, framesOut * mFrameSize);
+                            memset(activeTrack->mSink.raw, 0, framesOut * activeTrack->frameSize());
                         }
                         activeTrack->releaseBuffer(&activeTrack->mSink);
                     }
@@ -7287,6 +7736,7 @@ reacquire_wakelock:
                     // FIXME could do a partial drop of framesOut
                     if (activeTrack->mFramesToDrop > 0) {
                         activeTrack->mFramesToDrop -= (ssize_t)framesOut;
+                        MTK_ALOGV("activeTrack->mFramesToDrop %zd", activeTrack->mFramesToDrop);
                         if (activeTrack->mFramesToDrop <= 0) {
                             activeTrack->clearSyncStartEvent();
                         }
@@ -7440,7 +7890,8 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
         audio_input_flags_t *flags,
         pid_t tid,
         status_t *status,
-        audio_port_handle_t portId)
+        audio_port_handle_t portId,
+        const String16& opPackageName)
 {
     size_t frameCount = *pFrameCount;
     size_t notificationFrameCount = *pNotificationFrameCount;
@@ -7574,7 +8025,7 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
         track = new RecordTrack(this, client, attr, sampleRate,
                       format, channelMask, frameCount,
                       nullptr /* buffer */, (size_t)0 /* bufferSize */, sessionId, creatorPid, uid,
-                      *flags, TrackBase::TYPE_DEFAULT, portId);
+                      *flags, TrackBase::TYPE_DEFAULT, opPackageName, portId);
 
         lStatus = track->initCheck();
         if (lStatus != NO_ERROR) {
@@ -7777,6 +8228,11 @@ status_t AudioFlinger::RecordThread::getActiveMicrophones(
 {
     ALOGV("RecordThread::getActiveMicrophones");
     AutoMutex _l(mLock);
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS04659641 audioserver NE issue
+    if (mInput == nullptr || mInput->stream == nullptr) {
+        return INVALID_OPERATION;
+    }
+#endif
     status_t status = mInput->stream->getActiveMicrophones(activeMicrophones);
     return status;
 }
@@ -7786,6 +8242,11 @@ status_t AudioFlinger::RecordThread::setPreferredMicrophoneDirection(
 {
     ALOGV("setPreferredMicrophoneDirection(%d)", direction);
     AutoMutex _l(mLock);
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS04659641 audioserver NE issue
+    if (mInput == nullptr || mInput->stream == nullptr) {
+        return INVALID_OPERATION;
+    }
+#endif
     return mInput->stream->setPreferredMicrophoneDirection(direction);
 }
 
@@ -7793,6 +8254,11 @@ status_t AudioFlinger::RecordThread::setPreferredMicrophoneFieldDimension(float 
 {
     ALOGV("setPreferredMicrophoneFieldDimension(%f)", zoom);
     AutoMutex _l(mLock);
+#if defined(MTK_AUDIO_FIX_DEFAULT_DEFECT) // ALPS04659641 audioserver NE issue
+    if (mInput == nullptr || mInput->stream == nullptr) {
+        return INVALID_OPERATION;
+    }
+#endif
     return mInput->stream->setPreferredMicrophoneFieldDimension(zoom);
 }
 
@@ -9472,5 +9938,68 @@ void AudioFlinger::MmapCaptureThread::toAudioPortConfig(struct audio_port_config
         config->flags.input = mInput->flags;
     }
 }
+
+// <MTK_AUDIOMIXER_ENABLE_DRC
+void AudioFlinger::MixerThread::releaseTrackDrc_l(int trackId)
+{
+    if (FeatureOption::MTK_AUDIOMIXER_ENABLE_DRC) {
+        mAudioMixer->releaseDRC(trackId);
+    }
+}
+
+// ALPS04408933 low latency support drc
+void AudioFlinger::MixerThread::DRCParse(drc_command command, bool enable, String8 strValue)
+{
+    FastMixerStateQueue *sq = NULL;
+    FastMixerState *state = NULL;
+
+    ALOGD("%s, command %d, enable %d", __func__, command, enable);
+
+    if (mFastMixer != 0) {
+        sq = mFastMixer->sq();
+        state = sq->begin();
+    }
+
+    switch (command) {
+    case DRC_ENALBLE:
+        mAudioMixer->setDRCEnable(enable);
+
+        if (mFastMixer != 0) {
+            state->mDRCEnable = enable;
+            state->mDRCEnableGen++;
+        }
+        break;
+    case DRC_UPDATE_PARAM:
+        mUpdateACFHCFParam = enable;
+
+        if (mFastMixer != 0) {
+            state->mUpdateACFHCFParamGen ++;
+        }
+        break;
+    case DRC_CUSTOM_SCENE:
+        mUpdateCustomSceneParam = enable;
+        mCustomScene = strValue;
+
+        if (mFastMixer != 0) {
+            state->mCustomScene = strValue;
+            state->mUpdateCustomSceneParamGen ++;
+        }
+        break;
+    default:
+        ALOGE("%s, not support command %d", __func__, command);
+        break;
+    }
+
+    if (mFastMixer != 0) {
+        sq->end(true);
+        sq->push(FastMixerStateQueue::BLOCK_NEVER);
+    }
+}
+
+
+void AudioFlinger::DirectOutputThread::releaseTrackDrc_l(int trackId __unused)
+{
+}
+// MTK_AUDIOMIXER_ENABLE_DRC>
 
 } // namespace android

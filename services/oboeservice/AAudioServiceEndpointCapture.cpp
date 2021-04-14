@@ -32,6 +32,11 @@
 #include "AAudioServiceEndpointCapture.h"
 #include "AAudioServiceEndpointShared.h"
 
+#if defined(MTK_AUDIO_DEBUG)
+#include <string.h>
+#include <media/AudioUtilmtk.h>
+#endif
+
 using namespace android;  // TODO just import names needed
 using namespace aaudio;   // TODO just import names needed
 
@@ -76,6 +81,22 @@ void *AAudioServiceEndpointCapture::callbackLoop() {
                   result, getFramesPerBurst());
             break;
         }
+
+#if defined(MTK_AUDIO_DEBUG)
+        {
+            using namespace android;
+            if (AudioDump::getProperty(AudioDump::PROP_AUDIO_DUMP_AAUDIO)) {
+                String8 fileName = String8::format("%s_pid%d_tid%d.pcm",
+                                                   AudioDump::aaudio_share_ul,
+                                                   getpid(), gettid());
+                AudioDump::threadDump(fileName, mDistributionBuffer,
+                           getFramesPerBurst()*getStreamInternal()->getBytesPerFrame(),
+                           AAudioConvert_aaudioToAndroidDataFormat(getStreamInternal()->getFormat()),
+                           getStreamInternal()->getSampleRate(),
+                           getStreamInternal()->getSamplesPerFrame());
+            }
+        }
+#endif
 
         // Distribute data to each active stream.
         { // brackets are for lock_guard

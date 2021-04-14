@@ -60,6 +60,7 @@
 #include <mediautils/BatteryNotifier.h>
 #include <private/android_filesystem_config.h>
 #include <utils/Singleton.h>
+#include <stagefright/AVStageExtensions.h>
 
 namespace android {
 
@@ -863,7 +864,8 @@ static CodecBase *CreateCCodec() {
 sp<CodecBase> MediaCodec::GetCodecBase(const AString &name, const char *owner) {
     if (owner) {
         if (strcmp(owner, "default") == 0) {
-            return new ACodec;
+            return AVStageFactory::get()->createACodec();
+            //return new ACodec;
         } else if (strncmp(owner, "codec2", 6) == 0) {
             return CreateCCodec();
         }
@@ -873,7 +875,8 @@ sp<CodecBase> MediaCodec::GetCodecBase(const AString &name, const char *owner) {
         return CreateCCodec();
     } else if (name.startsWithIgnoreCase("omx.")) {
         // at this time only ACodec specifies a mime type.
-        return new ACodec;
+        //return new ACodec;
+        return AVStageFactory::get()->createACodec();
     } else if (name.startsWithIgnoreCase("android.filter.")) {
         return new MediaFilter;
     } else {
@@ -2490,6 +2493,9 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             }
 
             extractCSD(format);
+            if (flags & CONFIGURE_FLAG_ENABLE_THUMBNAIL_OPTIMIZATION) {
+                format->setInt32("enableThumbnailOptimzation", 1);
+            }
 
             mCodec->initiateConfigureComponent(format);
             break;

@@ -219,6 +219,10 @@ cc_library {
         "libFLAC",
     ],
 
+    include_dirs: [
+        "vendor/mediatek/proprietary/frameworks/av/AVEnhance/libmtkavenhancements",
+    ],
+
     header_libs:[
         "libnativeloader-dummy-headers",
         "libstagefright_xmlparser_headers",
@@ -259,6 +263,10 @@ cc_library {
             "signed-integer-overflow",
         ],
     },
+
+    defaults: [
+        "mtk_libstagefright_defaults",
+    ],
 }
 
 cc_library_static {
@@ -318,5 +326,35 @@ cc_library_static {
             "signed-integer-overflow",
         ],
     },
+    defaults: [
+        "mtk_libstagefright_defaults",
+    ],
+}
+
+bootstrap_go_package {
+    name:"soong-libstagefright-mediatek",
+    pkgPath:"android/soong/libstagefright/mediatek",
+    deps:[
+        "soong-android",
+        "soong-cc",
+    ],
+    srcs:[
+        "libstagefright.go",
+    ],
+    pluginFor:["soong_build"],
+}
+
+
+mtk_libstagefright_defaults {
+    name: "mtk_libstagefright_defaults",
+    include_dirs: [
+        "vendor/mediatek/proprietary/frameworks/av/AVEnhance/libavextensions"
+    ],
+    header_libs: [
+        "mtk_openmax_headers",
+    ],
+    static_libs: [
+        "libavextensions",
+    ],
 }
 

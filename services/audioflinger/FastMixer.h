@@ -111,6 +111,12 @@ private:
 #ifdef TEE_SINK
     NBAIO_Tee       mTee;
 #endif
+
+// <MTK_AUDIOMIXER_ENABLE_DRC // ALPS04408933 low latency support drc
+    int         mDRCEnableGen;
+    int         mUpdateACFHCFParamGen;
+    int         mUpdateCustomSceneParamGen;
+// MTK_AUDIOMIXER_ENABLE_DRC>
 };  // class FastMixer
 
 }   // namespace android
